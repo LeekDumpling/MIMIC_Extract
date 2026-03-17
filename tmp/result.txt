@@ -1,0 +1,136 @@
+(base) PS D:\contests\MIMIC_Extract> python utils/clean_cohort_csvs.py --input_dir csv --output_dir csv/cleaned --resource_path resources
+
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.0.2 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+Traceback (most recent call last):  File "D:\contests\MIMIC_Extract\utils\clean_cohort_csvs.py", line 35, in <module>
+    import pandas as pd
+  File "D:\Anaconda\A3\lib\site-packages\pandas\__init__.py", line 80, in <module>
+    from pandas.core.api import (
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\api.py", line 28, in <module>
+    from pandas.core.arrays import Categorical
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\arrays\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\arrays\arrow\__init__.py", line 5, in <module>
+    from pandas.core.arrays.arrow.array import ArrowExtensionArray
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\arrays\arrow\array.py", line 53, in <module>
+    from pandas.core import (
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\ops\__init__.py", line 8, in <module>
+    from pandas.core.ops.array_ops import (
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\ops\array_ops.py", line 56, in <module>
+    from pandas.core.computation import expressions
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\computation\expressions.py", line 21, in <module>
+    from pandas.core.computation.check import NUMEXPR_INSTALLED
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\computation\check.py", line 5, in <module>
+    ne = import_optional_dependency("numexpr", errors="warn")
+  File "D:\Anaconda\A3\lib\site-packages\pandas\compat\_optional.py", line 135, in import_optional_dependency
+    module = importlib.import_module(name)
+  File "D:\Anaconda\A3\lib\importlib\__init__.py", line 127, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "D:\Anaconda\A3\lib\site-packages\numexpr\__init__.py", line 24, in <module>
+    from numexpr.interpreter import MAX_THREADS, use_vml, __BLOCK_SIZE1__
+AttributeError: _ARRAY_API not found
+
+A module that was compiled using NumPy 1.x cannot be run in
+NumPy 2.0.2 as it may crash. To support both 1.x and 2.x
+versions of NumPy, modules must be compiled with NumPy 2.0.
+Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+
+If you are a user of the module, the easiest solution will be to
+downgrade to 'numpy<2' or try to upgrade the affected module.
+We expect that some modules will need time to support NumPy 2.
+
+Traceback (most recent call last):  File "D:\contests\MIMIC_Extract\utils\clean_cohort_csvs.py", line 35, in <module>
+    import pandas as pd
+  File "D:\Anaconda\A3\lib\site-packages\pandas\__init__.py", line 80, in <module>
+    from pandas.core.api import (
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\api.py", line 28, in <module>
+    from pandas.core.arrays import Categorical
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\arrays\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\arrays\arrow\__init__.py", line 5, in <module>
+    from pandas.core.arrays.arrow.array import ArrowExtensionArray
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\arrays\arrow\array.py", line 67, in <module>
+    from pandas.core.arrays.masked import BaseMaskedArray
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\arrays\masked.py", line 61, in <module>
+    from pandas.core import (
+  File "D:\Anaconda\A3\lib\site-packages\pandas\core\nanops.py", line 52, in <module>
+    bn = import_optional_dependency("bottleneck", errors="warn")
+  File "D:\Anaconda\A3\lib\site-packages\pandas\compat\_optional.py", line 135, in import_optional_dependency
+    module = importlib.import_module(name)
+  File "D:\Anaconda\A3\lib\importlib\__init__.py", line 127, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "D:\Anaconda\A3\lib\site-packages\bottleneck\__init__.py", line 7, in <module>
+    from .move import (move_argmax, move_argmin, move_max, move_mean, move_median,
+AttributeError: _ARRAY_API not found
+
+Saved variable name mapping → csv/cleaned\variable_name_mapping.csv
+csv_column_name   mimic_extract_level2_name  cleaning_thresholds_defined  outlier_low  valid_low  valid_high  outlier_high
+     creatinine                  Creatinine                         True          0.0       0.10       60.00          66.0
+            bun         Blood urea nitrogen                         True          0.0       0.00      250.00         275.0
+         sodium                      Sodium                         True          0.0      50.00      225.00         250.0
+      potassium                   Potassium                         True          0.0       0.00       12.00          15.0
+       chloride                    Chloride                         True          0.0      50.00      175.00         200.0
+    bicarbonate                 Bicarbonate                         True          0.0       0.00       60.00          66.0
+        calcium                     Calcium                        False          NaN        NaN         NaN           NaN
+    glucose_lab                     Glucose                         True          0.0      33.00     2000.00        2200.0
+       aniongap                   Anion Gap                         True          0.0       5.00       50.00          55.0
+        albumin                     Albumin                         True          0.0       0.60        6.00          60.0
+     hemoglobin                  Hemoglobin                         True          0.0       0.00       25.00          30.0
+     hematocrit                  Hematocrit                         True          0.0       0.00       75.00         100.0
+            wbc      White blood cell count                         True          0.0       0.00     1000.00        1100.0
+       platelet                   Platelets                         True          0.0       0.00     2000.00        2200.0
+     troponin_t                  Troponin-T                         True          0.0       0.01       20.85          24.0
+             pt            Prothrombin time                         True          0.0       9.90       97.10         150.0
+            ptt Partial thromboplastin time                         True          0.0      18.80      150.00         150.0
+     heart_rate                  Heart rate                         True          0.0       0.00      350.00         390.0
+            sbp     Systolic blood pressure                         True          0.0       0.00      375.00         375.0
+            dbp    Diastolic blood pressure                         True          0.0       0.00      375.00         375.0
+            mbp         Mean blood pressure                         True          0.0      14.00      330.00         375.0
+      resp_rate            Respiratory rate                         True          0.0       0.00      300.00         330.0
+           spo2           Oxygen saturation                         True          0.0       0.00      100.00         150.0
+  temperature_c                 Temperature                         True         14.2      26.00       45.00          47.0
+  omr_weight_kg                      Weight                         True          0.0       0.00      250.00         250.0
+
+Saved variables-not-in-MIMIC-Extract list → csv/cleaned\variables_not_in_mimic_extract.csv
+csv_column_name                                                                         reason
+       ntprobnp NT-proBNP: cardiac biomarker not included in MIMIC-Extract variable_ranges.csv
+            crp          C-reactive protein: not included in MIMIC-Extract variable_ranges.csv
+            inr       INR: not listed as a separate entry in MIMIC-Extract variable_ranges.csv
+        omr_bmi       BMI from OMR outpatient records: not in MIMIC-Extract (ICU-focused tool)
+        omr_sbp             Outpatient SBP from OMR: separate from in-hospital chartevents SBP
+        omr_dbp             Outpatient DBP from OMR: separate from in-hospital chartevents DBP
+
+Found 3 file(s) to clean:
+  csv\hfpef_cohort_win_48h24h.csv
+  csv\hfpef_cohort_win_48h48h.csv
+  csv\hfpef_cohort_win_hadm.csv
+
+============================================================
+Cleaning: hfpef_cohort_win_48h24h.csv
+============================================================
+  Loaded 530 rows x 61 columns
+  No outliers found – data is within all defined ranges.
+  Saved cleaned file → csv/cleaned\hfpef_cohort_win_48h24h_cleaned.csv
+
+============================================================
+Cleaning: hfpef_cohort_win_48h48h.csv
+============================================================
+  Loaded 530 rows x 61 columns
+  No outliers found – data is within all defined ranges.
+  Saved cleaned file → csv/cleaned\hfpef_cohort_win_48h48h_cleaned.csv
+
+============================================================
+Cleaning: hfpef_cohort_win_hadm.csv
+============================================================
+  Loaded 530 rows x 61 columns
+  pt (Prothrombin time): 0 outliers→NaN, 1 clipped to VALID_LOW=9.9, 0 clipped to VALID_HIGH=97.1
+  Saved cleaned file → csv/cleaned\hfpef_cohort_win_hadm_cleaned.csv
+
+Done. Cleaned files saved to: csv/cleaned/
