@@ -33,14 +33,19 @@ from typing import Dict, Tuple
 try:
     import numpy as np
     import pandas as pd
-except ImportError as _import_err:
+except (ImportError, AttributeError) as _import_err:
     raise ImportError(
-        "{}\n\n"
-        "Required packages are missing. Install them with:\n"
+        "{}: {}\n\n"
+        "numpy and pandas are required. Install them with:\n"
+        "    pip install numpy pandas\n"
+        "or install all dependencies at once:\n"
         "    pip install -r utils/requirements.txt\n"
         "or activate the MIMIC-Extract conda environment:\n"
-        "    conda activate mimic_extract".format(_import_err)
-    ) from _import_err
+        "    conda activate mimic_extract\n\n"
+        "Tip: make sure you are running the correct Python interpreter:\n"
+        "    python -m pip show numpy pandas".format(
+            type(_import_err).__name__, _import_err)
+    ) from None
 
 
 # ---------------------------------------------------------------------------
