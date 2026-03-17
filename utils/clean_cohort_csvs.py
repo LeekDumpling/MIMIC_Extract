@@ -28,21 +28,38 @@ Also emits two reference artifacts to --output_dir:
 import argparse
 import os
 import glob
+import sys
 import warnings
 from typing import Dict, Tuple
 
 try:
     import numpy as np
-    # Suppress numpy-2.0 compatibility RuntimeWarnings and the related
-    # UserWarnings emitted when optional pandas speed-up libraries
-    # (numexpr, bottleneck) were compiled against NumPy 1.x.  Pandas
-    # falls back to pure-Python implementations and works correctly;
-    # without this filter the user sees a scary-looking "Traceback"
-    # block in the console even though the script succeeds.
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        warnings.filterwarnings("ignore", category=UserWarning)
-        import pandas as pd
+    # When NumPy 2.x is installed alongside optional pandas speed-up
+    # libraries (numexpr, bottleneck) compiled for NumPy 1.x, importing
+    # those libraries triggers numpy's C-level compatibility shim which
+    # prints a full exception traceback directly via fprintf(stderr) –
+    # BEFORE emitting a Python RuntimeWarning.  warnings.filterwarnings()
+    # only intercepts the Python-level warning; it cannot suppress the
+    # C-level fprintf output.
+    #
+    # Fix: insert a None sentinel into sys.modules for each problematic
+    # optional dependency that has not been successfully imported yet.
+    # The Python import machinery raises ModuleNotFoundError immediately
+    # without executing the C extension, so numpy's compat shim is never
+    # triggered.  pandas.import_optional_dependency(errors="warn")
+    # catches the ImportError gracefully and falls back to pure-Python
+    # implementations.  The sentinels are removed in the finally block
+    # so no other code in this process is affected.
+    _blocked = [m for m in ('numexpr', 'bottleneck') if m not in sys.modules]
+    for _m in _blocked:
+        sys.modules[_m] = None  # type: ignore[assignment]
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            import pandas as pd
+    finally:
+        for _m in _blocked:
+            sys.modules.pop(_m, None)
 except (ImportError, AttributeError, ValueError) as _import_err:
     raise ImportError(
         "{}: {}\n\n"
