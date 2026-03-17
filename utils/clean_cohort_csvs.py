@@ -27,6 +27,7 @@ Also emits two reference artifacts to --output_dir:
 import argparse
 import os
 import glob
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -124,7 +125,7 @@ def load_variable_ranges(resource_path: str) -> pd.DataFrame:
     return vr
 
 
-def apply_outlier_limits(df: pd.DataFrame, var_ranges: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def apply_outlier_limits(df: pd.DataFrame, var_ranges: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
     """
     Apply outlier removal and valid-range clipping for all mapped lab/vital columns.
 
@@ -229,7 +230,7 @@ def clean_single_file(input_path: str, output_path: str, var_ranges: pd.DataFram
     print(f"{'='*60}")
 
     df = pd.read_csv(input_path, low_memory=False)
-    print(f"  Loaded {len(df)} rows × {len(df.columns)} columns")
+    print(f"  Loaded {len(df)} rows x {len(df.columns)} columns")
 
     # Step 1 – type enforcement
     df = enforce_types(df)
@@ -240,7 +241,9 @@ def clean_single_file(input_path: str, output_path: str, var_ranges: pd.DataFram
         print("  No outliers found – data is within all defined ranges.")
 
     # Step 3 – save
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     df.to_csv(output_path, index=False)
     print(f"  Saved cleaned file → {output_path}")
 
