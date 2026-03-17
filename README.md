@@ -154,7 +154,7 @@ To do this, just set the POP_SIZE environmental variable. For example, to build 
      as a higher authority postgres user to and have it run the commands. This is common in setups where
      multiple users have read-only access to postgres at once. If you do this, you may need to take extra
      steps to expose the resulting concepts tables to other users.
-  2. I built concepts, but now the code can't see them. This can be for a few reasons - firslty, you may not
+  2. I built concepts, but now the code can't see them. This can be for a few reasons - firstly, you may not
      have permissions to read the new tables, and secondly, they may be in the wrong namespace. Our code
      expects them to be fully visible and within the mimiciii namespace. To adjust these properties, login as
      the owning postgres user and adjust the permissions and namespaces of those views manually. A few

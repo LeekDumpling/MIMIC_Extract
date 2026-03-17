@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Batch data cleaning for HFpEF cohort CSV files exported from MIMIC-IV hosp module.
 
@@ -29,8 +30,17 @@ import os
 import glob
 from typing import Dict, Tuple
 
-import numpy as np
-import pandas as pd
+try:
+    import numpy as np
+    import pandas as pd
+except ImportError as _import_err:
+    raise ImportError(
+        "{}\n\n"
+        "Required packages are missing. Install them with:\n"
+        "    pip install -r utils/requirements.txt\n"
+        "or activate the MIMIC-Extract conda environment:\n"
+        "    conda activate mimic_extract".format(_import_err)
+    ) from _import_err
 
 
 # ---------------------------------------------------------------------------
