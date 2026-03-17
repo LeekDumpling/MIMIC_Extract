@@ -28,11 +28,21 @@ Also emits two reference artifacts to --output_dir:
 import argparse
 import os
 import glob
+import warnings
 from typing import Dict, Tuple
 
 try:
     import numpy as np
-    import pandas as pd
+    # Suppress numpy-2.0 compatibility RuntimeWarnings and the related
+    # UserWarnings emitted when optional pandas speed-up libraries
+    # (numexpr, bottleneck) were compiled against NumPy 1.x.  Pandas
+    # falls back to pure-Python implementations and works correctly;
+    # without this filter the user sees a scary-looking "Traceback"
+    # block in the console even though the script succeeds.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
+        warnings.filterwarnings("ignore", category=UserWarning)
+        import pandas as pd
 except (ImportError, AttributeError, ValueError) as _import_err:
     raise ImportError(
         "{}: {}\n\n"
@@ -180,7 +190,12 @@ def apply_outlier_limits(df: pd.DataFrame, var_ranges: pd.DataFrame) -> Tuple[pd
         if any(np.isnan([outlier_low, outlier_high, valid_low, valid_high])):
             continue
 
-        col = df_clean[csv_col].copy().astype(float)
+        col = df_clean[csv_col].astype(float)
+        # Write the float-cast column back so that NaN assignment and
+        # non-integer clip values (e.g. VALID_LOW=9.9) are stored correctly.
+        # Without this, an all-integer column stays int64 and the .loc
+        # assignment raises TypeError or silently truncates the clipped value.
+        df_clean[csv_col] = col
         non_null = col.notna()
 
         outlier_mask   = non_null & ((col < outlier_low) | (col > outlier_high))
