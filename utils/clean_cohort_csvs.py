@@ -33,14 +33,22 @@ from typing import Dict, Tuple
 try:
     import numpy as np
     import pandas as pd
-except ImportError as _import_err:
+except (ImportError, AttributeError, ValueError) as _import_err:
     raise ImportError(
-        "{}\n\n"
-        "Required packages are missing. Install them with:\n"
-        "    pip install -r utils/requirements.txt\n"
-        "or activate the MIMIC-Extract conda environment:\n"
-        "    conda activate mimic_extract".format(_import_err)
-    ) from _import_err
+        "{}: {}\n\n"
+        "numpy and pandas are required, and they must be compatible with each other.\n"
+        "A common cause of this error is numpy 2.x installed alongside pandas < 2.0\n"
+        "(e.g. numpy 2.0.2 + pandas 1.4.4 will produce a binary-incompatibility\n"
+        "ValueError: 'numpy.dtype size changed').\n\n"
+        "Recommended fixes (choose one):\n"
+        "  Upgrade pandas:   pip install \"pandas>=2.0\"\n"
+        "  Downgrade numpy:  pip install \"numpy<2.0\"\n"
+        "  Install all deps: pip install -r utils/requirements.txt\n"
+        "  Use the conda env: conda activate mimic_extract\n\n"
+        "Check what is installed:\n"
+        "    python -m pip show numpy pandas".format(
+            type(_import_err).__name__, _import_err)
+    ) from None
 
 
 # ---------------------------------------------------------------------------

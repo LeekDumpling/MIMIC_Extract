@@ -1,4 +1,4 @@
-# **MIMIC-Extract**:A Data Extraction, Preprocessing, and Representation Pipeline for MIMIC-III
+# **MIMIC-Extract**: A Data Extraction, Preprocessing, and Representation Pipeline for MIMIC-III
 
 # About
 This repo contains code for **MIMIC-Extract**. It has been divided into the following folders:
