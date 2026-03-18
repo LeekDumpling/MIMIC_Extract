@@ -1,0 +1,166 @@
+window,column,pct_missing,decision,note
+48h24h,crp,96.23,DROP,96.2% missing ≥ 60% threshold
+48h24h,ntprobnp,80.19,DROP,80.2% missing ≥ 60% threshold
+48h24h,spo2,74.53,DROP,74.5% missing ≥ 60% threshold
+48h24h,sbp,74.53,DROP,74.5% missing ≥ 60% threshold
+48h24h,dbp,74.53,DROP,74.5% missing ≥ 60% threshold
+48h24h,mbp,74.53,DROP,74.5% missing ≥ 60% threshold
+48h24h,heart_rate,74.53,DROP,74.5% missing ≥ 60% threshold
+48h24h,resp_rate,74.53,DROP,74.5% missing ≥ 60% threshold
+48h24h,temperature_c,74.53,DROP,74.5% missing ≥ 60% threshold
+48h24h,troponin_t,70.94,DROP,70.9% missing ≥ 60% threshold
+48h24h,albumin,65.47,DROP,65.5% missing ≥ 60% threshold
+48h24h,ptt,30.19,IMPUTE+FLAG,30.2% missing → impute + add _missing_flag column
+48h24h,inr,26.6,IMPUTE+FLAG,26.6% missing → impute + add _missing_flag column
+48h24h,pt,26.6,IMPUTE+FLAG,26.6% missing → impute + add _missing_flag column
+48h24h,omr_sbp,9.25,IMPUTE,9.2% missing → simple imputation
+48h24h,omr_dbp,9.25,IMPUTE,9.2% missing → simple imputation
+48h24h,calcium,5.28,IMPUTE,5.3% missing → simple imputation
+48h24h,omr_bmi,2.45,IMPUTE,2.5% missing → simple imputation
+48h24h,hemoglobin,2.26,IMPUTE,2.3% missing → simple imputation
+48h24h,wbc,2.26,IMPUTE,2.3% missing → simple imputation
+48h24h,platelet,2.26,IMPUTE,2.3% missing → simple imputation
+48h24h,omr_weight_kg,2.26,IMPUTE,2.3% missing → simple imputation
+48h24h,hematocrit,2.08,IMPUTE,2.1% missing → simple imputation
+48h24h,glucose_lab,1.32,IMPUTE,1.3% missing → simple imputation
+48h24h,bun,1.13,IMPUTE,1.1% missing → simple imputation
+48h24h,chloride,1.13,IMPUTE,1.1% missing → simple imputation
+48h24h,bicarbonate,1.13,IMPUTE,1.1% missing → simple imputation
+48h24h,sodium,1.13,IMPUTE,1.1% missing → simple imputation
+48h24h,creatinine,1.13,IMPUTE,1.1% missing → simple imputation
+48h24h,aniongap,1.13,IMPUTE,1.1% missing → simple imputation
+48h24h,potassium,1.13,IMPUTE,1.1% missing → simple imputation
+48h24h,atrial_fibrillation,0.0,KEEP,no missing values
+48h24h,gender,0.0,KEEP,no missing values
+48h24h,anchor_age,0.0,KEEP,no missing values
+48h24h,hypertension,0.0,KEEP,no missing values
+48h24h,diabetes_without_cc,0.0,KEEP,no missing values
+48h24h,myocardial_infarct,0.0,KEEP,no missing values
+48h24h,diabetes_with_cc,0.0,KEEP,no missing values
+48h24h,charlson_score,0.0,KEEP,no missing values
+48h24h,renal_disease,0.0,KEEP,no missing values
+48h24h,chronic_pulmonary_disease,0.0,KEEP,no missing values
+48h24h,peripheral_vascular_disease,0.0,KEEP,no missing values
+48h24h,cerebrovascular_disease,0.0,KEEP,no missing values
+48h24h,malignant_cancer,0.0,KEEP,no missing values
+48h24h,mild_liver_disease,0.0,KEEP,no missing values
+48h24h,severe_liver_disease,0.0,KEEP,no missing values
+48h24h,cci_from_flags,0.0,KEEP,no missing values
+48h24h,hf_any_diabetes,0.0,KEEP,no missing values
+48h24h,hf_cardiorenal,0.0,KEEP,no missing values
+48h24h,hf_met_syndrome_proxy,0.0,KEEP,no missing values
+48h24h,hf_af_ckd,0.0,KEEP,no missing values
+48h24h,hf_high_risk_triad,0.0,KEEP,no missing values
+48h24h,hf_competing_risk,0.0,KEEP,no missing values
+48h24h,hf_comorbidity_burden,0.0,KEEP,no missing values
+48h24h,hf_comorb_score_custom,0.0,KEEP,no missing values
+48h48h,crp,95.47,DROP,95.5% missing ≥ 60% threshold
+48h48h,ntprobnp,79.62,DROP,79.6% missing ≥ 60% threshold
+48h48h,spo2,74.15,DROP,74.2% missing ≥ 60% threshold
+48h48h,sbp,74.15,DROP,74.2% missing ≥ 60% threshold
+48h48h,dbp,74.15,DROP,74.2% missing ≥ 60% threshold
+48h48h,mbp,74.15,DROP,74.2% missing ≥ 60% threshold
+48h48h,heart_rate,74.15,DROP,74.2% missing ≥ 60% threshold
+48h48h,resp_rate,74.15,DROP,74.2% missing ≥ 60% threshold
+48h48h,temperature_c,74.15,DROP,74.2% missing ≥ 60% threshold
+48h48h,troponin_t,70.19,DROP,70.2% missing ≥ 60% threshold
+48h48h,albumin,62.83,DROP,62.8% missing ≥ 60% threshold
+48h48h,ptt,27.92,IMPUTE+FLAG,27.9% missing → impute + add _missing_flag column
+48h48h,inr,24.91,IMPUTE+FLAG,24.9% missing → impute + add _missing_flag column
+48h48h,pt,24.91,IMPUTE+FLAG,24.9% missing → impute + add _missing_flag column
+48h48h,omr_sbp,9.25,IMPUTE,9.2% missing → simple imputation
+48h48h,omr_dbp,9.25,IMPUTE,9.2% missing → simple imputation
+48h48h,calcium,4.53,IMPUTE,4.5% missing → simple imputation
+48h48h,omr_bmi,2.45,IMPUTE,2.5% missing → simple imputation
+48h48h,omr_weight_kg,2.26,IMPUTE,2.3% missing → simple imputation
+48h48h,wbc,1.89,IMPUTE,1.9% missing → simple imputation
+48h48h,hemoglobin,1.89,IMPUTE,1.9% missing → simple imputation
+48h48h,platelet,1.89,IMPUTE,1.9% missing → simple imputation
+48h48h,hematocrit,1.7,IMPUTE,1.7% missing → simple imputation
+48h48h,glucose_lab,1.13,IMPUTE,1.1% missing → simple imputation
+48h48h,bun,0.94,IMPUTE,0.9% missing → simple imputation
+48h48h,chloride,0.94,IMPUTE,0.9% missing → simple imputation
+48h48h,bicarbonate,0.94,IMPUTE,0.9% missing → simple imputation
+48h48h,sodium,0.94,IMPUTE,0.9% missing → simple imputation
+48h48h,creatinine,0.94,IMPUTE,0.9% missing → simple imputation
+48h48h,aniongap,0.94,IMPUTE,0.9% missing → simple imputation
+48h48h,potassium,0.94,IMPUTE,0.9% missing → simple imputation
+48h48h,atrial_fibrillation,0.0,KEEP,no missing values
+48h48h,gender,0.0,KEEP,no missing values
+48h48h,anchor_age,0.0,KEEP,no missing values
+48h48h,hypertension,0.0,KEEP,no missing values
+48h48h,diabetes_without_cc,0.0,KEEP,no missing values
+48h48h,myocardial_infarct,0.0,KEEP,no missing values
+48h48h,diabetes_with_cc,0.0,KEEP,no missing values
+48h48h,charlson_score,0.0,KEEP,no missing values
+48h48h,renal_disease,0.0,KEEP,no missing values
+48h48h,chronic_pulmonary_disease,0.0,KEEP,no missing values
+48h48h,peripheral_vascular_disease,0.0,KEEP,no missing values
+48h48h,cerebrovascular_disease,0.0,KEEP,no missing values
+48h48h,malignant_cancer,0.0,KEEP,no missing values
+48h48h,mild_liver_disease,0.0,KEEP,no missing values
+48h48h,severe_liver_disease,0.0,KEEP,no missing values
+48h48h,cci_from_flags,0.0,KEEP,no missing values
+48h48h,hf_any_diabetes,0.0,KEEP,no missing values
+48h48h,hf_cardiorenal,0.0,KEEP,no missing values
+48h48h,hf_met_syndrome_proxy,0.0,KEEP,no missing values
+48h48h,hf_af_ckd,0.0,KEEP,no missing values
+48h48h,hf_high_risk_triad,0.0,KEEP,no missing values
+48h48h,hf_competing_risk,0.0,KEEP,no missing values
+48h48h,hf_comorbidity_burden,0.0,KEEP,no missing values
+48h48h,hf_comorb_score_custom,0.0,KEEP,no missing values
+hadm,crp,89.62,DROP,89.6% missing ≥ 60% threshold
+hadm,ntprobnp,75.09,DROP,75.1% missing ≥ 60% threshold
+hadm,spo2,68.11,DROP,68.1% missing ≥ 60% threshold
+hadm,sbp,68.11,DROP,68.1% missing ≥ 60% threshold
+hadm,dbp,68.11,DROP,68.1% missing ≥ 60% threshold
+hadm,mbp,68.11,DROP,68.1% missing ≥ 60% threshold
+hadm,heart_rate,68.11,DROP,68.1% missing ≥ 60% threshold
+hadm,resp_rate,68.11,DROP,68.1% missing ≥ 60% threshold
+hadm,temperature_c,68.11,DROP,68.1% missing ≥ 60% threshold
+hadm,troponin_t,64.91,DROP,64.9% missing ≥ 60% threshold
+hadm,albumin,52.26,IMPUTE+FLAG,52.3% missing → impute + add _missing_flag column
+hadm,ptt,17.55,IMPUTE,17.5% missing → simple imputation
+hadm,inr,16.23,IMPUTE,16.2% missing → simple imputation
+hadm,pt,16.23,IMPUTE,16.2% missing → simple imputation
+hadm,omr_sbp,9.25,IMPUTE,9.2% missing → simple imputation
+hadm,omr_dbp,9.25,IMPUTE,9.2% missing → simple imputation
+hadm,calcium,2.83,IMPUTE,2.8% missing → simple imputation
+hadm,omr_bmi,2.45,IMPUTE,2.5% missing → simple imputation
+hadm,omr_weight_kg,2.26,IMPUTE,2.3% missing → simple imputation
+hadm,wbc,1.32,IMPUTE,1.3% missing → simple imputation
+hadm,hemoglobin,1.32,IMPUTE,1.3% missing → simple imputation
+hadm,platelet,1.32,IMPUTE,1.3% missing → simple imputation
+hadm,glucose_lab,1.13,IMPUTE,1.1% missing → simple imputation
+hadm,hematocrit,1.13,IMPUTE,1.1% missing → simple imputation
+hadm,bun,0.94,IMPUTE,0.9% missing → simple imputation
+hadm,chloride,0.94,IMPUTE,0.9% missing → simple imputation
+hadm,bicarbonate,0.94,IMPUTE,0.9% missing → simple imputation
+hadm,sodium,0.94,IMPUTE,0.9% missing → simple imputation
+hadm,creatinine,0.94,IMPUTE,0.9% missing → simple imputation
+hadm,aniongap,0.94,IMPUTE,0.9% missing → simple imputation
+hadm,potassium,0.94,IMPUTE,0.9% missing → simple imputation
+hadm,atrial_fibrillation,0.0,KEEP,no missing values
+hadm,gender,0.0,KEEP,no missing values
+hadm,anchor_age,0.0,KEEP,no missing values
+hadm,hypertension,0.0,KEEP,no missing values
+hadm,diabetes_without_cc,0.0,KEEP,no missing values
+hadm,myocardial_infarct,0.0,KEEP,no missing values
+hadm,diabetes_with_cc,0.0,KEEP,no missing values
+hadm,charlson_score,0.0,KEEP,no missing values
+hadm,renal_disease,0.0,KEEP,no missing values
+hadm,chronic_pulmonary_disease,0.0,KEEP,no missing values
+hadm,peripheral_vascular_disease,0.0,KEEP,no missing values
+hadm,cerebrovascular_disease,0.0,KEEP,no missing values
+hadm,malignant_cancer,0.0,KEEP,no missing values
+hadm,mild_liver_disease,0.0,KEEP,no missing values
+hadm,severe_liver_disease,0.0,KEEP,no missing values
+hadm,cci_from_flags,0.0,KEEP,no missing values
+hadm,hf_any_diabetes,0.0,KEEP,no missing values
+hadm,hf_cardiorenal,0.0,KEEP,no missing values
+hadm,hf_met_syndrome_proxy,0.0,KEEP,no missing values
+hadm,hf_af_ckd,0.0,KEEP,no missing values
+hadm,hf_high_risk_triad,0.0,KEEP,no missing values
+hadm,hf_competing_risk,0.0,KEEP,no missing values
+hadm,hf_comorbidity_burden,0.0,KEEP,no missing values
+hadm,hf_comorb_score_custom,0.0,KEEP,no missing values

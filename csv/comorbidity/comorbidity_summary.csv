@@ -1,0 +1,4 @@
+window,n,hypertension_pct,atrial_fibrillation_pct,myocardial_infarct_pct,diabetes_without_cc_pct,diabetes_with_cc_pct,hf_any_diabetes_pct,renal_disease_pct,chronic_pulmonary_disease_pct,peripheral_vascular_disease_pct,cerebrovascular_disease_pct,malignant_cancer_pct,mild_liver_disease_pct,severe_liver_disease_pct,hf_cardiorenal_pct,hf_met_syndrome_proxy_pct,hf_af_ckd_pct,hf_high_risk_triad_pct,hf_competing_risk_pct,charlson_score_mean,cci_from_flags_mean,hf_comorbidity_burden_mean,hf_comorb_score_custom_mean
+48h24h,530,92.1,53.8,23.8,24.9,36.8,49.1,49.6,37.0,11.1,10.4,10.0,6.8,2.6,49.6,46.4,27.7,14.9,12.5,6.61,4.02,1.04,3.96
+48h48h,530,92.1,53.8,23.8,24.9,36.8,49.1,49.6,37.0,11.1,10.4,10.0,6.8,2.6,49.6,46.4,27.7,14.9,12.5,6.61,4.02,1.04,3.96
+hadm,530,92.1,53.8,23.8,24.9,36.8,49.1,49.6,37.0,11.1,10.4,10.0,6.8,2.6,49.6,46.4,27.7,14.9,12.5,6.61,4.02,1.04,3.96

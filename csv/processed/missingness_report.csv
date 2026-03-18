@@ -1,0 +1,166 @@
+window,column,n_total,n_missing,pct_missing,dtype,is_binary,decision,note
+48h24h,crp,530,510,96.23,float64,False,DROP,96.2% missing ≥ 60% threshold
+48h24h,ntprobnp,530,425,80.19,float64,False,DROP,80.2% missing ≥ 60% threshold
+48h24h,spo2,530,395,74.53,float64,False,DROP,74.5% missing ≥ 60% threshold
+48h24h,sbp,530,395,74.53,float64,False,DROP,74.5% missing ≥ 60% threshold
+48h24h,dbp,530,395,74.53,float64,False,DROP,74.5% missing ≥ 60% threshold
+48h24h,mbp,530,395,74.53,float64,False,DROP,74.5% missing ≥ 60% threshold
+48h24h,heart_rate,530,395,74.53,float64,False,DROP,74.5% missing ≥ 60% threshold
+48h24h,resp_rate,530,395,74.53,float64,False,DROP,74.5% missing ≥ 60% threshold
+48h24h,temperature_c,530,395,74.53,float64,False,DROP,74.5% missing ≥ 60% threshold
+48h24h,troponin_t,530,376,70.94,float64,False,DROP,70.9% missing ≥ 60% threshold
+48h24h,albumin,530,347,65.47,float64,False,DROP,65.5% missing ≥ 60% threshold
+48h24h,ptt,530,160,30.19,float64,False,IMPUTE+FLAG,30.2% missing → impute + add _missing_flag column
+48h24h,inr,530,141,26.6,float64,False,IMPUTE+FLAG,26.6% missing → impute + add _missing_flag column
+48h24h,pt,530,141,26.6,float64,False,IMPUTE+FLAG,26.6% missing → impute + add _missing_flag column
+48h24h,omr_sbp,530,49,9.25,float64,False,IMPUTE,9.2% missing → simple imputation
+48h24h,omr_dbp,530,49,9.25,float64,False,IMPUTE,9.2% missing → simple imputation
+48h24h,calcium,530,28,5.28,float64,False,IMPUTE,5.3% missing → simple imputation
+48h24h,omr_bmi,530,13,2.45,float64,False,IMPUTE,2.5% missing → simple imputation
+48h24h,hemoglobin,530,12,2.26,float64,False,IMPUTE,2.3% missing → simple imputation
+48h24h,wbc,530,12,2.26,float64,False,IMPUTE,2.3% missing → simple imputation
+48h24h,platelet,530,12,2.26,float64,False,IMPUTE,2.3% missing → simple imputation
+48h24h,omr_weight_kg,530,12,2.26,float64,False,IMPUTE,2.3% missing → simple imputation
+48h24h,hematocrit,530,11,2.08,float64,False,IMPUTE,2.1% missing → simple imputation
+48h24h,glucose_lab,530,7,1.32,float64,False,IMPUTE,1.3% missing → simple imputation
+48h24h,bun,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h24h,chloride,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h24h,bicarbonate,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h24h,sodium,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h24h,creatinine,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h24h,aniongap,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h24h,potassium,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h24h,atrial_fibrillation,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,gender,530,0,0.0,str,False,KEEP,no missing values
+48h24h,anchor_age,530,0,0.0,int64,False,KEEP,no missing values
+48h24h,hypertension,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,diabetes_without_cc,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,myocardial_infarct,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,diabetes_with_cc,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,charlson_score,530,0,0.0,int64,False,KEEP,no missing values
+48h24h,renal_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,chronic_pulmonary_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,peripheral_vascular_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,cerebrovascular_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,malignant_cancer,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,mild_liver_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,severe_liver_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,cci_from_flags,530,0,0.0,int64,False,KEEP,no missing values
+48h24h,hf_any_diabetes,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,hf_cardiorenal,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,hf_met_syndrome_proxy,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,hf_af_ckd,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,hf_high_risk_triad,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,hf_competing_risk,530,0,0.0,int64,True,KEEP,no missing values
+48h24h,hf_comorbidity_burden,530,0,0.0,int64,False,KEEP,no missing values
+48h24h,hf_comorb_score_custom,530,0,0.0,int64,False,KEEP,no missing values
+48h48h,crp,530,506,95.47,float64,False,DROP,95.5% missing ≥ 60% threshold
+48h48h,ntprobnp,530,422,79.62,float64,False,DROP,79.6% missing ≥ 60% threshold
+48h48h,spo2,530,393,74.15,float64,False,DROP,74.2% missing ≥ 60% threshold
+48h48h,sbp,530,393,74.15,float64,False,DROP,74.2% missing ≥ 60% threshold
+48h48h,dbp,530,393,74.15,float64,False,DROP,74.2% missing ≥ 60% threshold
+48h48h,mbp,530,393,74.15,float64,False,DROP,74.2% missing ≥ 60% threshold
+48h48h,heart_rate,530,393,74.15,float64,False,DROP,74.2% missing ≥ 60% threshold
+48h48h,resp_rate,530,393,74.15,float64,False,DROP,74.2% missing ≥ 60% threshold
+48h48h,temperature_c,530,393,74.15,float64,False,DROP,74.2% missing ≥ 60% threshold
+48h48h,troponin_t,530,372,70.19,float64,False,DROP,70.2% missing ≥ 60% threshold
+48h48h,albumin,530,333,62.83,float64,False,DROP,62.8% missing ≥ 60% threshold
+48h48h,ptt,530,148,27.92,float64,False,IMPUTE+FLAG,27.9% missing → impute + add _missing_flag column
+48h48h,inr,530,132,24.91,float64,False,IMPUTE+FLAG,24.9% missing → impute + add _missing_flag column
+48h48h,pt,530,132,24.91,float64,False,IMPUTE+FLAG,24.9% missing → impute + add _missing_flag column
+48h48h,omr_sbp,530,49,9.25,float64,False,IMPUTE,9.2% missing → simple imputation
+48h48h,omr_dbp,530,49,9.25,float64,False,IMPUTE,9.2% missing → simple imputation
+48h48h,calcium,530,24,4.53,float64,False,IMPUTE,4.5% missing → simple imputation
+48h48h,omr_bmi,530,13,2.45,float64,False,IMPUTE,2.5% missing → simple imputation
+48h48h,omr_weight_kg,530,12,2.26,float64,False,IMPUTE,2.3% missing → simple imputation
+48h48h,wbc,530,10,1.89,float64,False,IMPUTE,1.9% missing → simple imputation
+48h48h,hemoglobin,530,10,1.89,float64,False,IMPUTE,1.9% missing → simple imputation
+48h48h,platelet,530,10,1.89,float64,False,IMPUTE,1.9% missing → simple imputation
+48h48h,hematocrit,530,9,1.7,float64,False,IMPUTE,1.7% missing → simple imputation
+48h48h,glucose_lab,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+48h48h,bun,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+48h48h,chloride,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+48h48h,bicarbonate,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+48h48h,sodium,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+48h48h,creatinine,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+48h48h,aniongap,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+48h48h,potassium,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+48h48h,atrial_fibrillation,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,gender,530,0,0.0,str,False,KEEP,no missing values
+48h48h,anchor_age,530,0,0.0,int64,False,KEEP,no missing values
+48h48h,hypertension,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,diabetes_without_cc,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,myocardial_infarct,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,diabetes_with_cc,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,charlson_score,530,0,0.0,int64,False,KEEP,no missing values
+48h48h,renal_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,chronic_pulmonary_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,peripheral_vascular_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,cerebrovascular_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,malignant_cancer,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,mild_liver_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,severe_liver_disease,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,cci_from_flags,530,0,0.0,int64,False,KEEP,no missing values
+48h48h,hf_any_diabetes,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,hf_cardiorenal,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,hf_met_syndrome_proxy,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,hf_af_ckd,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,hf_high_risk_triad,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,hf_competing_risk,530,0,0.0,int64,True,KEEP,no missing values
+48h48h,hf_comorbidity_burden,530,0,0.0,int64,False,KEEP,no missing values
+48h48h,hf_comorb_score_custom,530,0,0.0,int64,False,KEEP,no missing values
+hadm,crp,530,475,89.62,float64,False,DROP,89.6% missing ≥ 60% threshold
+hadm,ntprobnp,530,398,75.09,float64,False,DROP,75.1% missing ≥ 60% threshold
+hadm,spo2,530,361,68.11,float64,False,DROP,68.1% missing ≥ 60% threshold
+hadm,sbp,530,361,68.11,float64,False,DROP,68.1% missing ≥ 60% threshold
+hadm,dbp,530,361,68.11,float64,False,DROP,68.1% missing ≥ 60% threshold
+hadm,mbp,530,361,68.11,float64,False,DROP,68.1% missing ≥ 60% threshold
+hadm,heart_rate,530,361,68.11,float64,False,DROP,68.1% missing ≥ 60% threshold
+hadm,resp_rate,530,361,68.11,float64,False,DROP,68.1% missing ≥ 60% threshold
+hadm,temperature_c,530,361,68.11,float64,False,DROP,68.1% missing ≥ 60% threshold
+hadm,troponin_t,530,344,64.91,float64,False,DROP,64.9% missing ≥ 60% threshold
+hadm,albumin,530,277,52.26,float64,False,IMPUTE+FLAG,52.3% missing → impute + add _missing_flag column
+hadm,ptt,530,93,17.55,float64,False,IMPUTE,17.5% missing → simple imputation
+hadm,inr,530,86,16.23,float64,False,IMPUTE,16.2% missing → simple imputation
+hadm,pt,530,86,16.23,float64,False,IMPUTE,16.2% missing → simple imputation
+hadm,omr_sbp,530,49,9.25,float64,False,IMPUTE,9.2% missing → simple imputation
+hadm,omr_dbp,530,49,9.25,float64,False,IMPUTE,9.2% missing → simple imputation
+hadm,calcium,530,15,2.83,float64,False,IMPUTE,2.8% missing → simple imputation
+hadm,omr_bmi,530,13,2.45,float64,False,IMPUTE,2.5% missing → simple imputation
+hadm,omr_weight_kg,530,12,2.26,float64,False,IMPUTE,2.3% missing → simple imputation
+hadm,wbc,530,7,1.32,float64,False,IMPUTE,1.3% missing → simple imputation
+hadm,hemoglobin,530,7,1.32,float64,False,IMPUTE,1.3% missing → simple imputation
+hadm,platelet,530,7,1.32,float64,False,IMPUTE,1.3% missing → simple imputation
+hadm,glucose_lab,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+hadm,hematocrit,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
+hadm,bun,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+hadm,chloride,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+hadm,bicarbonate,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+hadm,sodium,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+hadm,creatinine,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+hadm,aniongap,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+hadm,potassium,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
+hadm,atrial_fibrillation,530,0,0.0,int64,True,KEEP,no missing values
+hadm,gender,530,0,0.0,str,False,KEEP,no missing values
+hadm,anchor_age,530,0,0.0,int64,False,KEEP,no missing values
+hadm,hypertension,530,0,0.0,int64,True,KEEP,no missing values
+hadm,diabetes_without_cc,530,0,0.0,int64,True,KEEP,no missing values
+hadm,myocardial_infarct,530,0,0.0,int64,True,KEEP,no missing values
+hadm,diabetes_with_cc,530,0,0.0,int64,True,KEEP,no missing values
+hadm,charlson_score,530,0,0.0,int64,False,KEEP,no missing values
+hadm,renal_disease,530,0,0.0,int64,True,KEEP,no missing values
+hadm,chronic_pulmonary_disease,530,0,0.0,int64,True,KEEP,no missing values
+hadm,peripheral_vascular_disease,530,0,0.0,int64,True,KEEP,no missing values
+hadm,cerebrovascular_disease,530,0,0.0,int64,True,KEEP,no missing values
+hadm,malignant_cancer,530,0,0.0,int64,True,KEEP,no missing values
+hadm,mild_liver_disease,530,0,0.0,int64,True,KEEP,no missing values
+hadm,severe_liver_disease,530,0,0.0,int64,True,KEEP,no missing values
+hadm,cci_from_flags,530,0,0.0,int64,False,KEEP,no missing values
+hadm,hf_any_diabetes,530,0,0.0,int64,True,KEEP,no missing values
+hadm,hf_cardiorenal,530,0,0.0,int64,True,KEEP,no missing values
+hadm,hf_met_syndrome_proxy,530,0,0.0,int64,True,KEEP,no missing values
+hadm,hf_af_ckd,530,0,0.0,int64,True,KEEP,no missing values
+hadm,hf_high_risk_triad,530,0,0.0,int64,True,KEEP,no missing values
+hadm,hf_competing_risk,530,0,0.0,int64,True,KEEP,no missing values
+hadm,hf_comorbidity_burden,530,0,0.0,int64,False,KEEP,no missing values
+hadm,hf_comorb_score_custom,530,0,0.0,int64,False,KEEP,no missing values
