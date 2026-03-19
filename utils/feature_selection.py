@@ -157,7 +157,9 @@ VIF_PRIORITY = [
 ]
 
 VIF_THRESHOLD = 10.0
-LASSO_PENALIZERS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+# 惩罚系数候选范围：从极小值（宽松正则化）到较大值（强正则化），确保在事件数较少时
+# 仍能找到保留至少一个特征的惩罚强度
+LASSO_PENALIZERS = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
 CV_FOLDS = 5
 UNIVARIATE_P_THRESHOLD = 0.10
 MIN_EVENTS = 10  # 最少事件数，低于此数不拟合 Cox 模型
@@ -380,6 +382,37 @@ def method2_vif(
 # 方法 3 — LASSO 惩罚 Cox（交叉验证选择 penalizer）
 # ---------------------------------------------------------------------------
 
+def _fit_lasso_cox(
+    df_model: pd.DataFrame,
+    candidate_features: List[str],
+    time_col: str,
+    event_col: str,
+    penalizer: float,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    在全量数据上以指定 penalizer 拟合 LASSO Cox 模型。
+
+    返回
+    ----
+    (coef_df, final_features)
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore")
+        cph = CoxPHFitter(penalizer=penalizer, l1_ratio=1.0)
+        cph.fit(
+            df_model,
+            duration_col=time_col,
+            event_col=event_col,
+            show_progress=False,
+        )
+    coef_df = cph.summary.copy().reset_index()
+    coef_df = coef_df.rename(columns={"covariate": "feature"})
+    coef_df["penalizer"] = penalizer
+    coef_df["nonzero"] = coef_df["coef"].abs() > 1e-4
+    final_features = coef_df.loc[coef_df["nonzero"], "feature"].tolist()
+    return coef_df, final_features
+
+
 def method3_lasso(
     df_cox: pd.DataFrame,
     candidate_features: List[str],
@@ -391,6 +424,12 @@ def method3_lasso(
     """
     对 candidate_features 集合拟合 LASSO 惩罚 Cox 模型，
     使用 k 折交叉验证对数偏似然（log-partial-likelihood）选择最优 penalizer。
+
+    回退策略（fallback）
+    --------------------
+    若 CV 最优 penalizer 的全量拟合结果中所有特征系数均为零，则从 penalizers
+    列表由小至大依次尝试，直到找到保留 ≥1 个非零特征的最小 penalizer。
+    回退时在 coef_df 中添加 ``fallback=True`` 列以供下游区分。
 
     返回
     ----
@@ -456,27 +495,36 @@ def method3_lasso(
         best_pen = float(cv_df.loc[cv_df["mean_cv_ll"].idxmax(), "penalizer"])
 
     # 全量数据最优 penalizer 拟合
+    fallback_used = False
     try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore")
-            cph_best = CoxPHFitter(penalizer=best_pen, l1_ratio=1.0)
-            cph_best.fit(
-                df_model,
-                duration_col=time_col,
-                event_col=event_col,
-                show_progress=False,
-            )
-        coef_df = cph_best.summary.copy().reset_index()
-        coef_df = coef_df.rename(columns={"covariate": "feature"})
-        coef_df["penalizer"] = best_pen
-        coef_df["nonzero"] = coef_df["coef"].abs() > 1e-4
-        final_features = coef_df.loc[coef_df["nonzero"], "feature"].tolist()
+        coef_df, final_features = _fit_lasso_cox(
+            df_model, candidate_features, time_col, event_col, best_pen
+        )
     except Exception as exc:
         coef_df = pd.DataFrame({"feature": candidate_features,
                                 "coef": np.nan, "penalizer": best_pen,
                                 "nonzero": False, "note": str(exc)[:120]})
         final_features = []
 
+    # 回退策略：若最优 penalizer 使所有特征归零，则按从小到大顺序尝试其他 penalizer
+    if len(final_features) == 0 and len(candidate_features) > 0:
+        sorted_pens = sorted(penalizers)
+        for fallback_pen in sorted_pens:
+            if fallback_pen >= best_pen:
+                continue  # 仅尝试比 best_pen 更小的值（更宽松正则化）
+            try:
+                coef_df_fb, final_fb = _fit_lasso_cox(
+                    df_model, candidate_features, time_col, event_col, fallback_pen
+                )
+                if len(final_fb) > 0:
+                    coef_df = coef_df_fb
+                    final_features = final_fb
+                    fallback_used = True
+                    break
+            except Exception:
+                continue
+
+    coef_df["fallback"] = fallback_used
     return cv_df, coef_df, final_features
 
 
@@ -581,6 +629,9 @@ def process_window_endpoint(
     # ---- 方法 3 ----
     print(f"  [{label}] 方法 3：LASSO Cox CV ({CV_FOLDS} 折, {len(LASSO_PENALIZERS)} 个 penalizer)")
     m3_cv, m3_coef, m3_final = method3_lasso(df_cox, m2_retained, event_col, time_col)
+    m3_fallback = bool(m3_coef["fallback"].any()) if not m3_coef.empty and "fallback" in m3_coef.columns else False
+    if m3_fallback:
+        print(f"  [{label}] 方法 3 回退：CV最优penalizer全归零，已切换至最小有效penalizer")
     print(f"  [{label}] 方法 3 最终特征：{len(m3_final)} 个 → {m3_final}")
 
     # ---- 汇总表 ----
@@ -625,6 +676,11 @@ def process_window_endpoint(
         "m1_candidates": len(m1_candidates),
         "m2_candidates": len(m2_retained),
         "m3_final": len(m3_final),
+        "m3_fallback": m3_fallback,
+        "m3_zero_reason": (
+            "lasso_shrinkage" if len(m3_final) == 0 and len(m2_retained) > 0 else
+            "no_m2_candidates" if len(m2_retained) == 0 else ""
+        ),
         "final_features": m3_final,
         "best_lasso_penalizer": float(m3_coef["penalizer"].iloc[0]) if not m3_coef.empty else None,
     }
@@ -714,15 +770,22 @@ def main() -> None:
     print(f"{'='*60}")
     hdr = f"{'窗口+终点':<20} {'输入':>6} {'M1':>5} {'M2':>5} {'M3':>5} 最终特征"
     print(hdr)
-    print("-" * 70)
+    print("-" * 80)
     for s in all_summaries:
         if s.get("skipped"):
             print(f"  {s['window']}/{s['endpoint']:<16} {'—':>6} {'—':>5} {'—':>5} {'—':>5} 跳过（事件数不足）")
         else:
             tag = f"{s['window']}/{s['endpoint']}"
-            feats = ", ".join(s["final_features"]) if s["final_features"] else "（无）"
+            if s["final_features"]:
+                feats = ", ".join(s["final_features"])
+                fallback_note = " [回退]" if s.get("m3_fallback") else ""
+                feat_str = f"{feats}{fallback_note}"
+            else:
+                reason = s.get("m3_zero_reason", "")
+                reason_note = f"（{reason}）" if reason else "（无）"
+                feat_str = reason_note
             print(f"  {tag:<20} {s['n_features_input']:>6} "
-                  f"{s['m1_candidates']:>5} {s['m2_candidates']:>5} {s['m3_final']:>5} {feats}")
+                  f"{s['m1_candidates']:>5} {s['m2_candidates']:>5} {s['m3_final']:>5} {feat_str}")
 
     print(f"\n完成。报告已保存至：{args.output_dir}/")
 
