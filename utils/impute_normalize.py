@@ -98,6 +98,8 @@ ID_COLS: List[str] = [
     "index_admittime",
     "index_dischtime",
     "death_date",
+    "last_dischtime",   # 末次住院出院时间（新增列）
+    "censor_date",      # MIMIC-IV 删失日期（新增列）
     "a4c_dicom_filepath",
 ]
 
@@ -109,6 +111,8 @@ OUTCOME_COLS: List[str] = [
     "died_30d",
     "died_90d",
     "died_1yr",
+    "os_event",   # Cox 事件指标（NULL = 院内死亡）
+    "os_days",    # Cox 时间变量（事件/删失患者为具体天数，院内死亡为 NULL）
 ]
 
 # Binary columns: imputed with mode if missing, but never normalised

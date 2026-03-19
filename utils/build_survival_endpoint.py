@@ -7,37 +7,39 @@
 读取经过插补/标准化的处理后 CSV（csv/processed/hfpef_cohort_win_*_processed.csv），
 为每个时间窗生成生存分析就绪的 CSV，输出至 csv/survival/。
 
-每个输出 CSV 包含：
-  - 原始特征列（来自处理后文件）
-  - 四组生存终点（每组含 time_ 和 event_ 两列）：
-      time_30d  / event_30d   — 30 天截止点
-      time_90d  / event_90d   — 90 天截止点
-      time_1yr  / event_1yr   — 365 天截止点
-      time_any  / event_any   — 不限时间（最长 365 天管理截尾）
-  - censored_at_admin：1 = 该患者随访被截尾至 365 天行政上限
+主要生存终点列（来自原始表格，已在 SQL 中计算完毕）
+  os_event  : Cox 事件指标
+                1  = 出院后死亡（事件）
+                0  = 删失（存活且随访期结束）
+                NULL = 院内死亡（不参与出院后分析，过滤条件：WHERE died_inhosp=0）
+  os_days   : Cox 时间变量（仅院外患者非 NULL）
+                事件患者 : dod − index_dischtime（天）
+                删失患者 : censor_date − index_dischtime（天）
+                           其中 censor_date = last_dischtime + 1 年
+                           last_dischtime = 患者在 MIMIC-IV 中的末次住院出院时间
+                院内死亡 : NULL（排除）
 
-同时将院内死亡患者单独保存至 csv/survival/hfpef_cohort_win_*_inhosp.csv。
-
-MIMIC-IV DOD（死亡日期）说明
+MIMIC-IV DOD 及删失规则说明
 --------------------------
-死亡日期来源于医院记录与州政府记录，优先采用医院记录。
-州政府记录通过姓名、出生日期及社会保障号的自定义规则匹配算法进行关联。
-MIMIC-IV 中所有记录在最后一例患者出院两年后才完成采集，以降低上报延迟影响。
-作为去标识化处理的一部分，出院超过 1 年的死亡日期被截尾（dod = NULL）。
-因此每位患者的最长可观测随访期严格为末次出院后 1 年（365 天）。
-  - 若患者在末次出院后 365 天内死亡且被记录捕获 → dod 填充去标识化后的死亡日期
-  - 若患者在末次出院后存活至少 1 年 → dod = NULL（在本脚本中视为行政截尾）
+- 删失时间从末次住院出院时间（last_dischtime）而非指数住院出院时间（index_dischtime）计算。
+- 若患者在指数住院后还有后续住院，其可观测随访窗口将延伸至 last_dischtime + 1 年。
+- 因此 os_days 可超过 365（多次住院患者的有效随访期更长）。
+- 仅当末次出院后存活满 1 年时，dod 才被截尾（os_event=0）。
 
-患者分类（院外随访分析）
-----------------------
-  died_inhosp = 1  → 排除出院后分析；写入独立的院内死亡文件
-  died_post_dc = 1 → 事件患者；time = days_survived_post_dc（精确死亡时间）
-  其余患者        → 删失患者；time = 365（行政截尾上限）
+衍生时间窗终点（由本脚本计算）
+  对于 H ∈ {30, 90, 365}（天），从 os_event / os_days 衍生：
+    time_<H>  = min(os_days, H)
+    event_<H> = 1  如果 os_event=1 且 os_days ≤ H
+              = 0  否则（含 os_event=0 的删失患者）
+    对于院内死亡患者（os_event=NULL）：time_<H> 和 event_<H> 均为 NULL，与院外终点隔离。
 
-用法
-----
-    python utils/build_survival_endpoint.py
-    python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir csv/survival
+输出文件
+  csv/survival/hfpef_cohort_win_*_survival.csv  — 所有患者（含院内死亡的 NULL 行）
+  csv/survival/hfpef_cohort_win_*_inhosp.csv    — 仅院内死亡患者（独立文件，供院内死亡分析）
+
+用法（Windows 单行命令）
+  python utils/build_survival_endpoint.py
+  python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir csv/survival
 """
 
 import argparse
@@ -65,28 +67,14 @@ except (ImportError, AttributeError, ValueError):
         "请执行：pip install numpy pandas"
     ) from None
 
-# 行政截尾上限（天）— MIMIC-IV 去标识化规则：出院超过 1 年的死亡日期被截尾
-ADMIN_CENSOR_DAYS: int = 365
-
-# 各终点时间窗（天）及对应列名后缀
+# 有限时间截止点（天）及对应列名后缀
+# None 表示"不限时间"（直接使用 os_days，不截断）
 HORIZONS: List[tuple] = [
     (30,   "30d"),
     (90,   "90d"),
     (365,  "1yr"),
-    (None, "any"),   # None 表示不限时间，仍受 ADMIN_CENSOR_DAYS 约束
+    (None, "any"),
 ]
-
-# 不得用于建模的列（标识符、时间戳、结局列）
-_OUTCOME_COLS = {
-    "hospital_expire_flag", "died_inhosp", "died_post_dc",
-    "days_survived_post_dc", "died_30d", "died_90d", "died_1yr",
-    "death_date",
-}
-_ID_COLS = {
-    "subject_id", "hadm_id", "index_study_id",
-    "index_study_datetime", "index_admittime", "index_dischtime",
-    "a4c_dicom_filepath",
-}
 
 
 def _resolve_path(path: str) -> str:
@@ -94,8 +82,7 @@ def _resolve_path(path: str) -> str:
     解析相对路径。
 
     若路径相对于当前工作目录不存在，则尝试相对于仓库根目录解析。
-    允许脚本从 utils/ 子目录（如 PyCharm 默认运行目录）直接启动，
-    无需手动指定绝对路径。
+    允许脚本从 utils/ 子目录（如 PyCharm 默认运行目录）直接启动。
     """
     if os.path.isabs(path) or os.path.exists(path):
         return path
@@ -103,61 +90,60 @@ def _resolve_path(path: str) -> str:
     return os.path.join(repo_root, path)
 
 
-def _safe_int(series: pd.Series) -> pd.Series:
-    """将列转换为数值型 Int8（可为 NaN）。"""
-    return pd.to_numeric(series, errors="coerce").astype("Int8")
-
-
 def build_endpoints(df: pd.DataFrame) -> pd.DataFrame:
     """
-    为单个时间窗的 DataFrame 构建所有生存终点列。
+    为 DataFrame 添加衍生生存终点列。
+
+    直接使用原始 os_event / os_days 列（已在 SQL 中正确计算），
+    在此基础上衍生各时间窗终点。
+
+    院内死亡患者（os_event=NaN、os_days=NaN）的所有衍生终点均保持 NaN，
+    以便与出院后分析明确隔离。
 
     参数
     ----
-    df : 包含 died_inhosp、died_post_dc、days_survived_post_dc 等结局列的 DataFrame。
-         注意：院内死亡行应在调用此函数前已被排除。
+    df : 包含 os_event、os_days 列的 DataFrame。
 
     返回
     ----
-    带有新生存终点列的 DataFrame（原地修改副本）。
+    带有新衍生终点列的 DataFrame 副本。
     """
     df = df.copy()
 
-    # 将关键结局列转为数值
-    died_post_dc = pd.to_numeric(df.get("died_post_dc", 0), errors="coerce").fillna(0)
-    days_raw = pd.to_numeric(df.get("days_survived_post_dc", np.nan), errors="coerce")
+    os_event = pd.to_numeric(df["os_event"], errors="coerce")  # 1/0/NaN
+    os_days  = pd.to_numeric(df["os_days"],  errors="coerce")  # float/NaN
 
-    # 行政截尾标志：删失患者（days_raw 为 NaN）视为在 ADMIN_CENSOR_DAYS 天时截尾
-    censored_mask = died_post_dc == 0  # 包括 days_raw 为 NaN 的删失患者
-
-    # censored_at_admin：若为删失患者，则标记为行政截尾
-    df["censored_at_admin"] = censored_mask.astype(int)
-
-    # 为删失患者将 days 填充为行政截尾天数
-    days_filled = days_raw.copy()
-    days_filled[censored_mask] = ADMIN_CENSOR_DAYS
+    # 院内死亡掩码：os_event 为 NaN 即院内死亡
+    inhosp_mask = os_event.isna()
 
     for horizon, suffix in HORIZONS:
         if horizon is None:
-            # 不限时间终点：仍受行政截尾约束
-            time_col = days_filled.clip(upper=ADMIN_CENSOR_DAYS)
-            event_col = (died_post_dc == 1).astype(int)
+            # 不限时间：直接使用 os_event / os_days
+            event_col = os_event.copy()
+            time_col  = os_days.copy()
         else:
-            # 有限时间终点：在 horizon 天内死亡才算事件
-            event_col = ((died_post_dc == 1) & (days_raw <= horizon)).astype(int)
-            # 时间 = min(实际死亡天数或行政截尾天数, horizon)
-            time_col = days_filled.clip(upper=horizon)
+            # 时间窗终点：在 horizon 天内死亡才算事件
+            # 对院内死亡患者，计算结果保持 NaN
+            event_col = pd.Series(np.nan, index=df.index, dtype=float)
+            time_col  = pd.Series(np.nan, index=df.index, dtype=float)
 
-        df[f"time_{suffix}"] = time_col.round(1)
+            alive_mask = ~inhosp_mask
+            event_col[alive_mask] = (
+                (os_event[alive_mask] == 1) & (os_days[alive_mask] <= horizon)
+            ).astype(float)
+            time_col[alive_mask] = os_days[alive_mask].clip(upper=horizon)
+
         df[f"event_{suffix}"] = event_col
+        df[f"time_{suffix}"]  = time_col.round(1)
 
     return df
 
 
 def process_file(
     input_path: str,
-    output_postdc_path: str,
+    output_all_path: str,
     output_inhosp_path: str,
+    output_dir: str,
     dry_run: bool = False,
 ) -> tuple:
     """
@@ -165,7 +151,7 @@ def process_file(
 
     返回
     ----
-    (df_postdc, df_inhosp) — 院外随访 DataFrame 和院内死亡 DataFrame。
+    (df_all, df_inhosp) — 全量 DataFrame（含院内死亡 NULL 行）和仅院内死亡 DataFrame。
     """
     print(f"\n{'='*60}")
     print(f"处理文件：{os.path.basename(input_path)}")
@@ -174,44 +160,51 @@ def process_file(
     df = pd.read_csv(input_path, low_memory=False)
     print(f"  读入 {len(df)} 行 × {len(df.columns)} 列")
 
-    # ---- 分离院内死亡患者 ----------------------------------------
-    died_inhosp = _safe_int(df.get("died_inhosp", pd.Series(0, index=df.index)))
-    inhosp_mask = died_inhosp == 1
+    # ---- 统计院内死亡（os_event 为 NaN）-----------------------------
+    os_event = pd.to_numeric(df.get("os_event"), errors="coerce")
+    inhosp_mask = os_event.isna()
     df_inhosp = df[inhosp_mask].copy().reset_index(drop=True)
-    df_postdc = df[~inhosp_mask].copy().reset_index(drop=True)
+    n_inhosp = int(inhosp_mask.sum())
+    n_postdc = int((~inhosp_mask).sum())
 
-    print(f"  院内死亡（排除）：{inhosp_mask.sum()} 例 → 写入院内死亡文件")
-    print(f"  院外随访分析：{len(df_postdc)} 例")
+    print(f"  院内死亡（os_event=NULL）：{n_inhosp} 例")
+    print(f"  院外患者（参与出院后分析）：{n_postdc} 例")
+    print(f"    其中事件（os_event=1）：{int((os_event == 1).sum())} 例")
+    print(f"    其中删失（os_event=0）：{int((os_event == 0).sum())} 例")
 
-    # ---- 构建生存终点列 ------------------------------------------
-    df_postdc = build_endpoints(df_postdc)
+    # ---- 构建衍生终点列 ------------------------------------------
+    df_all = build_endpoints(df)
 
-    # ---- 打印终点摘要 -------------------------------------------
-    print(f"\n  {'终点':<12} {'事件数':>8} {'事件率':>8} {'中位随访(天)':>14}")
+    # ---- 打印衍生终点摘要（仅院外患者）-----------------------------
+    df_postdc = df_all[~inhosp_mask]
+    print(f"\n  {'终点':<12} {'事件数':>8} {'事件率':>8} {'中位时间(天)':>14}")
     print(f"  {'-'*46}")
     for _, suffix in HORIZONS:
         ecol = f"event_{suffix}"
         tcol = f"time_{suffix}"
         if ecol in df_postdc.columns:
-            n_events = int(df_postdc[ecol].sum())
-            pct = n_events / len(df_postdc) * 100 if len(df_postdc) > 0 else 0
-            med_t = df_postdc[tcol].median()
+            e_vals = pd.to_numeric(df_postdc[ecol], errors="coerce").dropna()
+            t_vals = pd.to_numeric(df_postdc[tcol], errors="coerce").dropna()
+            n_events = int(e_vals.sum())
+            pct = n_events / len(e_vals) * 100 if len(e_vals) > 0 else 0
+            med_t = t_vals.median()
             print(f"  {suffix:<12} {n_events:>8} {pct:>7.1f}% {med_t:>14.1f}")
 
-    admin_censored = int(df_postdc.get("censored_at_admin", pd.Series(0)).sum())
-    print(f"\n  行政截尾（≥365 天）患者：{admin_censored} 例")
+    os_days_postdc = pd.to_numeric(df_postdc["os_days"], errors="coerce")
+    print(f"\n  os_days 范围（院外患者）：{os_days_postdc.min():.0f} – {os_days_postdc.max():.0f} 天")
+    print(f"  os_days > 365 的患者数：{(os_days_postdc > 365).sum()} 例（末次出院晚于指数出院）")
 
     if not dry_run:
-        os.makedirs(os.path.dirname(output_postdc_path), exist_ok=True)
-        df_postdc.to_csv(output_postdc_path, index=False)
-        print(f"\n  院外随访文件 → {output_postdc_path}")
-        if len(df_inhosp) > 0:
+        os.makedirs(output_dir, exist_ok=True)
+        df_all.to_csv(output_all_path, index=False)
+        print(f"\n  全量生存文件（含 NULL 行）→ {output_all_path}")
+        if n_inhosp > 0:
             df_inhosp.to_csv(output_inhosp_path, index=False)
-            print(f"  院内死亡文件 → {output_inhosp_path}")
+            print(f"  院内死亡独立文件 → {output_inhosp_path}")
     else:
         print("\n  [dry-run] 文件未写出")
 
-    return df_postdc, df_inhosp
+    return df_all, df_inhosp
 
 
 def main() -> None:
@@ -252,11 +245,10 @@ def main() -> None:
 
     for input_path in input_files:
         basename = os.path.basename(input_path)
-        # hfpef_cohort_win_hadm_processed.csv → hfpef_cohort_win_hadm
         stem = basename.replace("_processed", "").replace(".csv", "")
-        output_postdc_path = os.path.join(args.output_dir, f"{stem}_survival.csv")
+        output_all_path    = os.path.join(args.output_dir, f"{stem}_survival.csv")
         output_inhosp_path = os.path.join(args.output_dir, f"{stem}_inhosp.csv")
-        process_file(input_path, output_postdc_path, output_inhosp_path, args.dry_run)
+        process_file(input_path, output_all_path, output_inhosp_path, args.output_dir, args.dry_run)
 
     print(f"\n完成。生存终点文件已保存至：{args.output_dir}/")
 

@@ -131,6 +131,8 @@ DATETIME_COLS = [
     "index_admittime",
     "index_dischtime",
     "death_date",
+    "last_dischtime",   # 患者末次住院出院时间（新增列）
+    "censor_date",      # MIMIC-IV 删失日期 = last_dischtime + 1 年（新增列）
 ]
 
 # ---------------------------------------------------------------------------
@@ -143,6 +145,7 @@ BINARY_FLAG_COLS = [
     "died_30d",
     "died_90d",
     "died_1yr",
+    "os_event",         # Cox 事件指标（新增列；NULL = 院内死亡，不参与出院后分析）
     "hypertension",
     "atrial_fibrillation",
     "myocardial_infarct",

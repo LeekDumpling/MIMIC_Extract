@@ -107,5 +107,10 @@ venv.bak/
 *.ipynb_checkpoints*
 makejob
 
-# tags
-tags
+
+# Pipeline-generated CSV artifacts (derived outputs, not source data)
+csv/cleaned/
+csv/comorbidity/
+csv/processed/
+csv/survival/
+

@@ -14,13 +14,13 @@
 | 终点列 | 含义 | 事件定义 |
 |--------|------|---------|
 | `died_inhosp` | 院内死亡 | 二值变量；单独分析，不混入院外 Cox 模型 |
-| `died_post_dc` | 出院后任意时间死亡 | Cox 事件；time = `days_survived_post_dc` |
-| `died_30d` | 出院后 30 天内死亡 | Cox 事件；time 截至 30 天 |
-| `died_90d` | 出院后 90 天内死亡 | Cox 事件；time 截至 90 天 |
-| `died_1yr` | 出院后 1 年内死亡 | Cox 事件；time 截至 365 天 |
+| `os_event` / `os_days` | **主要 Cox 终点**（出院后死亡） | `os_event=1` + `os_days=dod−index_dischtime`；见步骤 6 |
+| `event_30d` / `time_30d` | 出院后 30 天内死亡（衍生） | 从 `os_event` + `os_days` 截断衍生 |
+| `event_90d` / `time_90d` | 出院后 90 天内死亡（衍生） | 从 `os_event` + `os_days` 截断衍生 |
+| `event_1yr` / `time_1yr` | 出院后 1 年内死亡（衍生） | 从 `os_event` + `os_days` 截断衍生 |
 
-三个特征时间窗（`win_hadm`、`win_48h24h`、`win_48h48h`）将与**五种终点定义**逐一组合，
-共产生 **3 × 5 = 15 个 Cox 模型**，比较不同特征窗口与时间截止点的预测效果。
+三个特征时间窗（`win_hadm`、`win_48h24h`、`win_48h48h`）将与**主要终点及三种时间截止点**逐一组合，
+共产生多个 Cox 模型，比较不同特征窗口与时间截止点的预测效果。
 
 ---
 
@@ -289,49 +289,77 @@ README_HFpEF_Cox.md           # ← 本文件
 
 **去标识化截尾规则（核心约束）**：
 - 作为去标识化处理的一部分，**出院超过 1 年的死亡日期会被截尾**（dod 字段置为 NULL）。
-- 因此，**每位患者的最长可观测随访期严格为末次出院后 1 年（365 天）**。
-- 示例：若患者末次出院日期为 2150-01-01，则可被记录的最晚死亡日期为 2151-01-01。
+- 截尾时间以**末次住院出院时间（`last_dischtime`）**为基准，而非指数住院出院时间：
+  `censor_date = last_dischtime + 1 年`
+- 若患者在指数住院后还有后续住院，其可观测随访窗口将延伸至末次出院加一年，
+  因此 **`os_days` 可超过 365 天**（多次住院患者的有效随访期更长）。
+- 示例：若患者末次出院日期为 2155-01-01（而指数出院为 2150-01-01），
+  则可被记录的最晚死亡日期为 2156-01-01；`os_days` 上限约为 6 年。
 
 **dod 字段取值规则**：
 
 | 情形 | dod 字段 |
 |------|---------|
-| 患者在出院后 365 天内死亡，且被医院或州记录捕获 | 填充去标识化后的死亡日期 |
-| 患者在末次出院后存活至少 1 年 | NULL（本脚本视为行政截尾） |
+| 患者在 `last_dischtime + 1 年` 之前死亡，且被医院或州记录捕获 | 填充去标识化后的死亡日期 |
+| 患者在 `last_dischtime` 后存活至少 1 年 | NULL（视为行政删失） |
+
+#### SQL 中新增的关键列
+
+原始表格已在 SQL 导出阶段（步骤 1/2）中预先计算以下列：
+
+| 列名 | 含义 | 取值 |
+|------|------|------|
+| `last_dischtime` | 患者在 MIMIC-IV 中所有住院中的末次出院时间（`MAX(dischtime)`） | 时间戳 |
+| `censor_date` | MIMIC-IV 行政删失日期 = `last_dischtime + 365 天` | 时间戳 |
+| `os_event` | Cox 事件指标 | `1` = 出院后死亡；`0` = 删失；`NULL` = 院内死亡 |
+| `os_days` | Cox 时间变量 | 事件患者：`dod − index_dischtime`；删失患者：`censor_date − index_dischtime`；院内死亡：`NULL` |
+
+> **重要**：`days_survived_post_dc` 仅对死亡患者非空（删失患者为 NaN），
+> **不可直接用于 Cox 模型**。Cox 分析请使用 `os_event` + `os_days`。
 
 #### 患者分类（院外随访分析）
 
-| 患者类型 | 处理方式 | 时间 |
-|---------|---------|------|
-| 院内死亡（`died_inhosp = 1`） | **排除**出院后分析；写入独立院内文件 | — |
-| 院外死亡（`died_post_dc = 1`） | 事件患者；event = 1 | `days_survived_post_dc`（按截止点截断） |
-| 存活删失（其余患者） | event = 0 | 365 天行政截尾上限 |
+| 患者类型 | 处理方式 | os_event | os_days |
+|---------|---------|---------|---------|
+| 院内死亡（`hospital_expire_flag=1`） | **排除**出院后分析；写入独立院内文件 | NULL | NULL |
+| 院外死亡（`died_post_dc = 1`） | 事件患者；进入 Cox 分析 | 1 | `dod − index_dischtime` |
+| 存活删失（其余院外患者） | 删失患者；进入 Cox 分析 | 0 | `censor_date − index_dischtime` |
 
-#### 生存终点矩阵
+> **Cox 分析前务必过滤**：`WHERE died_inhosp = 0`（或 `WHERE os_event IS NOT NULL`）
 
-脚本为每个时间窗输出以下四组终点列：
+#### 衍生时间窗终点（由脚本计算）
 
-| 终点后缀 | 截止点 | event 定义 | time 定义 |
-|---------|--------|-----------|---------|
-| `_30d` | 30 天 | 30 天内死亡 = 1 | min(days, 30) |
-| `_90d` | 90 天 | 90 天内死亡 = 1 | min(days, 90) |
-| `_1yr` | 365 天 | 365 天内死亡 = 1 | min(days, 365) |
-| `_any` | 不限（受 365 天截尾） | 出院后任意时间死亡 = 1 | min(days, 365) |
+`build_survival_endpoint.py` 从原始 `os_event` + `os_days` 衍生各时间截止点终点列：
 
-额外标志列：`censored_at_admin`（1 = 该患者随访被截至 365 天行政上限）。
+| 终点后缀 | 截止点 H | `event_<H>` 定义 | `time_<H>` 定义 |
+|---------|---------|----------------|----------------|
+| `_30d`  | 30 天   | `os_event=1` 且 `os_days ≤ 30` → 1，否则 0 | `min(os_days, 30)` |
+| `_90d`  | 90 天   | `os_event=1` 且 `os_days ≤ 90` → 1，否则 0 | `min(os_days, 90)` |
+| `_1yr`  | 365 天  | `os_event=1` 且 `os_days ≤ 365` → 1，否则 0 | `min(os_days, 365)` |
+| `_any`  | 不截断  | 等于 `os_event` | 等于 `os_days` |
 
-#### 分析矩阵（3 时间窗 × 5 终点 = 15 个 Cox 模型）
+院内死亡患者（`os_event=NULL`）的所有衍生终点均保持 **NULL**，与出院后分析明确隔离。
 
-|  | `win_hadm` | `win_48h24h` | `win_48h48h` |
-|--|:---:|:---:|:---:|
-| `died_post_dc`（_any） | ⬜ | ⬜ | ⬜ |
-| `died_30d` | ⬜ | ⬜ | ⬜ |
-| `died_90d` | ⬜ | ⬜ | ⬜ |
-| `died_1yr` | ⬜ | ⬜ | ⬜ |
-| `died_inhosp` | ⬜ | ⬜ | ⬜ |
+#### 本队列实际统计
 
-**输出**：`csv/survival/hfpef_cohort_win_*_survival.csv`（院外随访）及
-`csv/survival/hfpef_cohort_win_*_inhosp.csv`（院内死亡）
+| 指标 | 数值 |
+|------|------|
+| 总患者数 | 530 |
+| 院内死亡（排除） | 18 |
+| 院外患者（参与 Cox） | 512 |
+| 其中事件（`os_event=1`） | 267（52.1%） |
+| 其中删失（`os_event=0`） | 245（47.9%） |
+| `os_days` 范围 | 0 – 2324 天 |
+| `os_days > 365` 的患者（末次出院晚于指数出院） | 315 |
+
+**运行命令**：
+```bat
+python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir csv/survival
+```
+
+**输出**：
+- `csv/survival/hfpef_cohort_win_*_survival.csv`：全量患者（院外患者含终点列，院内死亡行终点为 NULL）
+- `csv/survival/hfpef_cohort_win_*_inhosp.csv`：仅院内死亡患者（独立分析用）
 
 ---
 
@@ -449,11 +477,15 @@ for endpoint in ['died_post_dc', 'died_30d', 'died_90d', 'died_1yr']:
 |------|------|------|
 | `hospital_expire_flag` | 二值 | 指数住院期间死亡 |
 | `died_inhosp` | 二值 | 院内死亡（同上） |
-| `died_post_dc` | 二值 | **Cox 事件指示变量**（出院后死亡） |
-| `days_survived_post_dc` | 浮点 | 出院后存活天数（删失患者为 NaN） |
+| `died_post_dc` | 二值 | 出院后死亡（辅助列，仅死亡患者非空） |
+| `days_survived_post_dc` | 浮点 | 出院后存活天数（**仅事件患者非空**，删失患者为 NaN；不可直接用于 Cox） |
 | `died_30d` | 二值 | 出院后 30 天内死亡 |
 | `died_90d` | 二值 | 出院后 90 天内死亡 |
 | `died_1yr` | 二值 | 出院后 1 年内死亡 |
+| `last_dischtime` | 时间戳 | 患者 MIMIC-IV 中末次住院出院时间（`MAX(dischtime)`） |
+| `censor_date` | 时间戳 | MIMIC-IV 行政删失日期 = `last_dischtime + 365 天` |
+| `os_event` | 二值/NULL | **Cox 主要事件指标**：1=出院后死亡；0=删失；NULL=院内死亡 |
+| `os_days` | 浮点/NULL | **Cox 主要时间变量**：事件患者 = `dod−index_dischtime`；删失患者 = `censor_date−index_dischtime`；院内死亡 = NULL |
 
 ### 合并症特征（二值，另有说明除外）
 
@@ -488,18 +520,38 @@ pt_missing_flag（48h 系列窗口）
 
 ## 完整流水线复现
 
+> **Windows 用户**：所有命令均写在一行，不使用反斜杠（`\`）换行。
+
+### 前提：从 MIMIC-IV 导出原始队列 CSV
+
+本流水线需要已完成以下操作：
+1. 在 MIMIC-IV PostgreSQL 数据库中执行 `SQL_Queries/codes.sql` 导出 ICD 诊断码
+2. 执行 `SQL_Queries/statics.sql`（或等效的队列查询），将结果导出为三个时间窗 CSV：
+   - `csv/hfpef_cohort_win_hadm.csv`
+   - `csv/hfpef_cohort_win_48h24h.csv`
+   - `csv/hfpef_cohort_win_48h48h.csv`
+
+> 原始 CSV 必须包含以下新增列（v2）：`last_dischtime`、`censor_date`、`os_event`、`os_days`。
+> 这些列由 SQL 在导出时预先计算（详见步骤 6 说明）。
+
+### 步骤 3–6：Python 流水线
+
 ```bat
+pip install numpy pandas scikit-learn
 python utils/clean_cohort_csvs.py --input_dir csv --output_dir csv/cleaned --resource_path resources
 python utils/compute_comorbidity.py --input_dir csv/cleaned --output_dir csv/comorbidity
 python utils/impute_normalize.py --input_dir csv/comorbidity --output_dir csv/processed
 python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir csv/survival
 ```
 
-**依赖包**：`numpy`、`pandas`、`scikit-learn`
+**各步骤说明**：
 
-```bat
-pip install numpy pandas scikit-learn
-```
+| 命令 | 输入 | 输出 |
+|------|------|------|
+| `clean_cohort_csvs.py` | `csv/` | `csv/cleaned/` — 离群值清洗、类型校正、datetime 解析 |
+| `compute_comorbidity.py` | `csv/cleaned/` | `csv/comorbidity/` — CCI 重计算、HFpEF 专项合并症特征 |
+| `impute_normalize.py` | `csv/comorbidity/` | `csv/processed/` — 缺失值插补、标准化（结局列保持原样） |
+| `build_survival_endpoint.py` | `csv/processed/` | `csv/survival/` — Cox 衍生终点列（`event_*/time_*`） |
 
 ---
 
