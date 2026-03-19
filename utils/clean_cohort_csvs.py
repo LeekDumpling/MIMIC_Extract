@@ -357,6 +357,36 @@ def save_reference_tables(output_dir: str, var_ranges: pd.DataFrame) -> None:
     print(not_in_mimic.to_string(index=False))
 
 
+def _resolve_path(path: str) -> str:
+    """
+    Resolve a (possibly relative) path.
+
+    When *path* is relative and does not exist under the current working
+    directory, the function retries relative to the repository root
+    (the directory that contains this script's parent folder).  This
+    allows the scripts to be launched from inside the ``utils/``
+    sub-directory (e.g. via PyCharm "Run" with the script file's folder
+    as the working directory) without requiring the user to pass explicit
+    absolute paths.
+
+    Examples
+    --------
+    Running from the repo root ``MIMIC_Extract/``::
+
+        python utils/clean_cohort_csvs.py  # works as before
+
+    Running from ``MIMIC_Extract/utils/``::
+
+        python clean_cohort_csvs.py        # also works now
+    """
+    if os.path.isabs(path) or os.path.exists(path):
+        return path
+    # Script lives at <repo_root>/utils/<script>.py
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate = os.path.join(repo_root, path)
+    return candidate
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -369,6 +399,10 @@ def main():
     ap.add_argument("--pattern",      type=str, default="hfpef_cohort_*.csv",
                     help="Glob pattern for input CSV files")
     args = ap.parse_args()
+
+    args.resource_path = _resolve_path(args.resource_path)
+    args.input_dir     = _resolve_path(args.input_dir)
+    args.output_dir    = _resolve_path(args.output_dir)
 
     var_ranges = load_variable_ranges(args.resource_path)
 

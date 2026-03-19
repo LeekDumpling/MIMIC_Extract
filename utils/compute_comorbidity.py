@@ -356,6 +356,23 @@ def process_file(
     return df
 
 
+def _resolve_path(path: str) -> str:
+    """
+    Resolve a (possibly relative) path.
+
+    When *path* is relative and does not exist under the current working
+    directory, the function retries relative to the repository root
+    (the directory that contains this script's parent folder).  This
+    allows the scripts to be launched from inside the ``utils/``
+    sub-directory (e.g. via PyCharm "Run") without requiring explicit
+    absolute paths.
+    """
+    if os.path.isabs(path) or os.path.exists(path):
+        return path
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo_root, path)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -378,6 +395,9 @@ def main() -> None:
         help="Print summaries without writing output files",
     )
     args = ap.parse_args()
+
+    args.input_dir  = _resolve_path(args.input_dir)
+    args.output_dir = _resolve_path(args.output_dir)
 
     pattern = os.path.join(args.input_dir, args.pattern)
     input_files = sorted(glob.glob(pattern))

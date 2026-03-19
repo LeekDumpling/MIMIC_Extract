@@ -2,17 +2,64 @@
 
 ## Project Overview
 
-This project builds a **Cox proportional hazards (Cox PH) model** to predict
-post-discharge mortality for patients hospitalised with **Heart Failure with
-Preserved Ejection Fraction (HFpEF)** using data from the
+This project builds **Cox proportional hazards (Cox PH) models** for multiple
+all-cause mortality endpoints in patients hospitalised with **Heart Failure
+with Preserved Ejection Fraction (HFpEF)** using data from the
 [MIMIC-IV](https://physionet.org/content/mimiciv/) database and the
 [MIMIC-Extract](https://github.com/MLforHealth/MIMIC_Extract) feature
 extraction pipeline.
 
-**Primary endpoint**: All-cause mortality after hospital discharge.
+**Endpoints analysed** (all-cause mortality; multiple time horizons):
+
+| Endpoint column | Description | Event definition |
+|----------------|-------------|-----------------|
+| `died_inhosp` | In-hospital death | Binary; excluded from post-discharge Cox |
+| `died_post_dc` | Post-discharge death (any time) | Cox event; time = `days_survived_post_dc` |
+| `died_30d` | 30-day post-discharge mortality | Cox event; time capped at 30 days |
+| `died_90d` | 90-day post-discharge mortality | Cox event; time capped at 90 days |
+| `died_1yr` | 1-year post-discharge mortality | Cox event; time capped at 365 days |
+
+Each of the three time-window feature sets (`win_hadm`, `win_48h24h`,
+`win_48h48h`) will be evaluated against **all five endpoint definitions**
+to identify the most predictive feature window and time horizon.
+
+> **Note — MIMIC-IV maximum follow-up**: MIMIC-IV is capped at **1 year of
+> follow-up** after discharge.  All survival analyses therefore treat 365 days
+> as the administrative censoring date.  Patients alive at 365 days are
+> right-censored with `time = 365`, `event = 0`.
 
 **Cohort**: 530 HFpEF index admissions from MIMIC-IV with a paired
 transthoracic echocardiogram study (A4C view).
+
+---
+
+## Running the Scripts
+
+All three pipeline scripts (`clean_cohort_csvs.py`, `compute_comorbidity.py`,
+`impute_normalize.py`) can be executed from **either** the repository root
+*or* the `utils/` sub-directory.  A path-resolution helper automatically
+falls back to repository-relative paths when the script is launched from
+inside `utils/` (e.g. via PyCharm's default "Run" configuration):
+
+```bash
+# From repo root (recommended)
+python utils/clean_cohort_csvs.py
+python utils/compute_comorbidity.py
+python utils/impute_normalize.py
+
+# From utils/ sub-directory — also works (paths resolved automatically)
+cd utils
+python clean_cohort_csvs.py
+python compute_comorbidity.py
+python impute_normalize.py
+```
+
+> **Bug fix (v2)**: Previous versions raised
+> `FileNotFoundError: variable_ranges.csv not found` when launched from
+> inside the `utils/` folder because the default `--resource_path resources`
+> was interpreted relative to the *current working directory* rather than the
+> *repository root*.  This has been fixed in all three scripts by the
+> `_resolve_path()` helper.
 
 ---
 
@@ -43,12 +90,12 @@ README_HFpEF_Cox.md      # ← this file
 | 3 | Data cleaning (outlier removal) | ✅ Done | `utils/clean_cohort_csvs.py` |
 | 4 | Comorbidity processing | ✅ Done | `utils/compute_comorbidity.py` |
 | 5 | Imputation & normalisation | ✅ Done | `utils/impute_normalize.py` |
-| 6 | Survival endpoint construction | ⬜ TODO | — |
-| 7 | Feature selection | ⬜ TODO | — |
-| 8 | Cox PH model fitting | ⬜ TODO | — |
-| 9 | Assumption testing | ⬜ TODO | — |
-| 10 | Model evaluation | ⬜ TODO | — |
-| 11 | Visualisation | ⬜ TODO | — |
+| 6 | Survival endpoint construction | ⬜ TODO | `utils/build_survival_endpoint.py` |
+| 7 | Feature selection (univariate Cox + VIF + LASSO) | ⬜ TODO | — |
+| 8 | Cox PH model fitting (per endpoint × window) | ⬜ TODO | — |
+| 9 | Assumption testing (Schoenfeld residuals) | ⬜ TODO | — |
+| 10 | Model evaluation (C-index, Brier score) | ⬜ TODO | — |
+| 11 | Visualisation (KM curves, forest plots) | ⬜ TODO | — |
 
 ---
 
@@ -269,64 +316,116 @@ and are **not** normalised.
 
 **Plan**:
 
-The Cox model requires a (time, event) pair for every patient:
+The Cox model requires a `(time, event)` pair for every patient.
+**Five separate endpoint definitions** will be evaluated — each produces a
+distinct `(time_days, event)` column pair:
 
-| Patient type | Event (`died_post_dc`) | Time variable |
-|-------------|----------------------|---------------|
-| Died after discharge | 1 | `days_survived_post_dc` |
-| Died in hospital | 0 (exclude or treat separately) | — |
-| Alive at last follow-up | 0 (censored) | Must be derived |
+| Endpoint | Event column | Time column | Censoring rule |
+|----------|-------------|-------------|---------------|
+| Post-discharge (any time) | `died_post_dc` | `days_survived_post_dc` | Cap at 365 days |
+| 30-day | `died_30d` | derived | time = min(days_survived_post_dc, 30); event = 0 if alive at 30 d |
+| 90-day | `died_90d` | derived | time = min(days_survived_post_dc, 90); event = 0 if alive at 90 d |
+| 1-year | `died_1yr` | derived | time = min(days_survived_post_dc, 365); event = 0 if alive at 365 d |
+| In-hospital | `died_inhosp` | LOS (derived) | Separate analysis; not mixed with post-discharge |
 
-For **censored patients** (`died_post_dc = 0`, `died_inhosp = 0`),
-`days_survived_post_dc` is `NaN`. The censoring time needs to be constructed
-as: `last_known_alive_date − index_dischtime`. The last-known-alive date can
-be approximated from MIMIC-IV `patients.dod` (date of death, if available)
-or from the study end-date of MIMIC-IV (~2019-12-31 for MIMIC-IV v2.2).
+**Patient-type handling** (all analyses except in-hospital):
+
+| Patient type | Event | Time |
+|-------------|-------|------|
+| Died after discharge | 1 | `days_survived_post_dc` (capped at horizon) |
+| Died in hospital | **excluded** from post-discharge analyses | — |
+| Alive at horizon | 0 (censored) | horizon (30 / 90 / 365) |
+| Censored before horizon | 0 | 365 (MIMIC-IV administrative ceiling) |
+
+> **MIMIC-IV administrative censoring**: The database has a maximum 1-year
+> follow-up.  All patients alive at 365 days post-discharge are coded as
+> right-censored at `time = 365`, `event = 0`.  There is no meaningful
+> survival data beyond this point.
 
 **Code to add** (`utils/build_survival_endpoint.py`):
-1. For `died_post_dc = 1`: `time = days_survived_post_dc`, `event = 1`.
-2. For `died_inhosp = 1`: exclude from post-discharge analysis or model
-   as a competing risk.
-3. For censored: `time = (mimic_study_end − index_dischtime).days`,
-   `event = 0`.
-4. Additional landmark analysis: for 1-year mortality (`died_1yr`),
-   truncate follow-up at 365 days.
+1. For each endpoint horizon H ∈ {30, 90, 365, ∞}:
+   - `time  = min(days_survived_post_dc, H)` (replace NaN → H for censored)
+   - `event = 1 if (died_post_dc == 1 and days_survived_post_dc ≤ H) else 0`
+2. Patients with `died_inhosp = 1` are written to a separate in-hospital
+   analysis frame.
+3. A flag `censored_at_admin` marks patients whose time was clipped to the
+   365-day administrative ceiling.
+
+**Analysis matrix** (3 windows × 5 endpoints = 15 Cox model fits):
+
+|  | `win_hadm` | `win_48h24h` | `win_48h48h` |
+|--|:---:|:---:|:---:|
+| `died_post_dc` | ⬜ | ⬜ | ⬜ |
+| `died_30d` | ⬜ | ⬜ | ⬜ |
+| `died_90d` | ⬜ | ⬜ | ⬜ |
+| `died_1yr` | ⬜ | ⬜ | ⬜ |
+| `died_inhosp` | ⬜ | ⬜ | ⬜ |
 
 ---
 
 ### Step 7 — Feature Selection *(TODO)*
 
-**Planned methods**:
-1. **Univariate Cox screening**: Wald test p-value < 0.05 per feature
-   (to remove obviously uninformative variables).
-2. **Variance Inflation Factor (VIF)**: Drop one of each highly-collinear
-   pair (VIF > 10), e.g. `creatinine` / `bun` / `cci_from_flags` /
-   `charlson_score`.
-3. **Clinical expert review**: Retain clinically important variables
-   regardless of univariate significance.
-4. **LASSO-penalised Cox** as an alternative automated selection approach
-   (`lifelines.fitters.CRCSplineFitter` or `scikit-survival`).
+**Rationale**: With ~50 candidate features and ~530 patients (many censored),
+the effective events-per-variable ratio is too low for stable Cox estimation.
+Feature selection methods 1, 2, and 4 will be applied in sequence:
+
+**Method 1 — Univariate Cox screening** *(first step)*
+
+- Fit a separate Cox model for each feature individually.
+- Retain features with Wald test p-value < 0.10 (lenient threshold at
+  this stage to avoid discarding clinically important variables).
+- This step reduces ~50 features to an initial candidate set.
+- Advantages: simple, transparent, directly uses the survival outcome.
+- Limitation: ignores collinearity; features may be significant univariately
+  but redundant in a joint model.
+
+**Method 2 — Collinearity check (VIF)**
+
+- Compute Variance Inflation Factor for the candidate set from Method 1.
+- For pairs with VIF > 10, drop the less clinically interpretable variable
+  (e.g. prefer `creatinine` over `bun`; prefer `charlson_score` over
+  `cci_from_flags`; prefer `hf_any_diabetes` over component flags).
+- This guards against inflated standard errors in the joint Cox model.
+
+**Method 4 — LASSO-penalised Cox** *(automated selection)*
+
+- Fit a LASSO-regularised Cox model (`scikit-survival` or
+  `lifelines` with L1 penalizer) on the Method 1 candidate set.
+- Use cross-validated log-partial-likelihood to choose the penalty λ.
+- Features with non-zero coefficients at the optimal λ form the final
+  feature set for the main Cox model.
+- LASSO is preferred over stepwise/AIC because it is less prone to
+  overfitting and has known regularisation-path properties.
+
+> *Note*: Method 3 (clinical expert review) from the original plan is
+> incorporated implicitly — known HFpEF risk factors (age, atrial
+> fibrillation, renal disease, diabetes) are retained in the model
+> even if they narrowly miss statistical thresholds.
 
 ---
 
 ### Step 8 — Cox PH Model Fitting *(TODO)*
 
-**Planned libraries**: `lifelines` (primary) or `statsmodels`.
+**Planned libraries**: `lifelines` (primary) or `scikit-survival`.
 
-**Model variants to evaluate**:
+Each of the 15 combinations (3 windows × 5 endpoints) will be evaluated
+with three model variants:
+
 | Model | Features | Purpose |
 |-------|---------|---------|
-| Model 1 (base) | Age + sex + charlson_score | Clinical reference |
-| Model 2 (lab) | Model 1 + lab panel | Lab-enriched |
-| Model 3 (comorbidity) | Model 1 + HF-specific composite flags | Comorbidity-enriched |
-| Model 4 (full) | All retained features | Maximal prediction |
+| Base | Age + sex + charlson_score | Clinical reference benchmark |
+| Lab | Base + retained lab panel | Lab-enriched |
+| Full | All features retained after Step 7 | Maximal prediction |
 
-**Implementation sketch**:
+**Implementation sketch** (per endpoint × window):
 ```python
 from lifelines import CoxPHFitter
-cph = CoxPHFitter(penalizer=0.1)
-cph.fit(df_model, duration_col='time_days', event_col='died_post_dc')
-cph.print_summary()
+for endpoint in ['died_post_dc', 'died_30d', 'died_90d', 'died_1yr']:
+    for window in ['hadm', '48h24h', '48h48h']:
+        df_model = build_model_df(window, endpoint)  # from Step 6
+        cph = CoxPHFitter(penalizer=0.1)
+        cph.fit(df_model, duration_col='time_days', event_col=endpoint)
+        cph.print_summary()
 ```
 
 ---
