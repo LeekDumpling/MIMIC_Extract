@@ -1,7 +1,0 @@
-csv_column_name,reason
-ntprobnp,NT-proBNP: cardiac biomarker not included in MIMIC-Extract variable_ranges.csv
-crp,C-reactive protein: not included in MIMIC-Extract variable_ranges.csv
-inr,INR: not listed as a separate entry in MIMIC-Extract variable_ranges.csv
-omr_bmi,BMI from OMR outpatient records: not in MIMIC-Extract (ICU-focused tool)
-omr_sbp,Outpatient SBP from OMR: separate from in-hospital chartevents SBP
-omr_dbp,Outpatient DBP from OMR: separate from in-hospital chartevents DBP
