@@ -363,37 +363,107 @@ python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir c
 
 ---
 
-### 步骤 7 — 特征选择（待完成）
+### 步骤 7 — 特征选择
 
-**背景**：约 50 个候选特征，530 例患者（其中许多为删失），有效事件/变量比不足，
-直接拟合 Cox 模型不稳定。将依次应用以下三种方法：
+**背景**：约 46–47 个候选特征，530 例患者，有效事件数随终点时间不同（27–267）。
+直接拟合全量特征的 Cox 模型过度拟合风险高（30 天终点 EPV ≈ 0.6，1 年终点 EPV ≈ 3）。
+三步流水线按顺序筛选，每步均输出可复用的 CSV 报告。
 
-**方法 1 — 单变量 Cox 筛选**（第一步）
+#### 方法 1 — 单变量 Cox 筛选
 
-- 对每个特征单独拟合 Cox 模型。
-- 保留 Wald 检验 p < 0.10 的特征（宽松阈值，避免遗漏有临床意义的变量）。
-- 此步骤将约 50 个特征精简为初始候选集。
-- 优点：简单透明，直接使用生存结局。
-- 局限：忽视共线性，单变量显著的特征在联合模型中可能冗余。
+对每个特征单独拟合 `CoxPHFitter`（lifelines），记录：
 
-**方法 2 — 共线性检查（VIF）**
+| 输出列 | 含义 |
+|--------|------|
+| `coef` | 偏回归系数 |
+| `exp_coef` | 风险比 HR |
+| `exp_coef_lower/upper_95` | 95% CI |
+| `z` / `p` | Wald 检验统计量 / p 值 |
+| `concordance` | Harrell C-index（该特征单独的区分能力） |
+| `n_events` | 终点事件数 |
+| `significant` | p < 0.10（宽松阈值，避免漏掉有临床意义的变量） |
 
-- 对方法 1 候选集计算方差膨胀因子（VIF）。
-- VIF > 10 的高度共线对，删除临床解释性较弱的一方
-  （如保留 `creatinine` 而非 `bun`；保留 `charlson_score` 而非 `cci_from_flags`；
-  保留 `hf_any_diabetes` 而非子标志列）。
-- 防止联合 Cox 模型中标准误过大。
+**报告文件**：
+- `method1_univariate_{endpoint}.csv`：全部特征结果（按 p 值升序排列）
+- `method1_candidates_{endpoint}.csv`：p < 0.10 且收敛的候选集
 
-**方法 4 — LASSO 惩罚 Cox**（自动选择）
+#### 方法 2 — VIF 共线性过滤
 
-- 在方法 1 候选集上拟合 LASSO 正则化 Cox 模型（`scikit-survival` 或 `lifelines` L1 惩罚）。
-- 通过交叉验证对数偏似然选择最优惩罚参数 λ。
-- 最优 λ 下非零系数对应的特征构成最终特征集。
-- LASSO 相比逐步筛选/AIC 更不易过拟合，且具有已知的正则化路径性质。
+对方法 1 候选集迭代计算方差膨胀因子（statsmodels VIF）：
 
-> 注：原计划中的方法 3（临床专家审查）以隐式方式融合——
-> 已知 HFpEF 危险因素（年龄、房颤、肾脏病、糖尿病）即使统计上勉强达到阈值，
-> 亦应纳入模型。
+1. 计算所有候选特征的 VIF。
+2. 若最大 VIF > 10，按**临床优先级**（`VIF_PRIORITY` 列表）删除优先级最低的特征。
+   - 保留 `creatinine` 优于 `bun`（GFR 代理更直接）
+   - 保留 `hemoglobin` 优于 `hematocrit`（浓度指标更稳定）
+   - 保留 `inr` 优于 `pt` / `ptt`（综合凝血指标）
+   - 保留 `charlson_score` 优于 `cci_from_flags`（标准量表）
+3. 重复直至所有 VIF ≤ 10 或剩余特征 ≤ 2。
+
+**报告文件**：
+- `method2_vif_{endpoint}.csv`：每轮迭代的 VIF 值及删除记录
+- `method2_candidates_{endpoint}.csv`：过滤后候选集
+
+#### 方法 3 — LASSO 惩罚 Cox（交叉验证）
+
+在方法 2 候选集上拟合 LASSO-Cox（`l1_ratio=1.0`，lifelines `CoxPHFitter`）：
+
+1. **k 折交叉验证**（k=5，随机种子=42）：在 10 个候选 penalizer（0.001→5.0）上评估验证集对数偏似然。
+2. 选取平均对数偏似然最高的 penalizer（λ*）。
+3. 以 λ* 在全量数据重新拟合，**|系数| > 1e-4** 的特征为最终入选特征。
+
+**报告文件**：
+- `method3_cv_{endpoint}.csv`：各 penalizer 的 CV 平均 / 标准差对数偏似然
+- `method3_lasso_{endpoint}.csv`：最优模型全部系数（`nonzero` 列标记入选）
+- `final_features_{endpoint}.csv`：三步汇总表（全特征 × 三步通过状态）
+
+#### 全局汇总报告
+
+`csv/feature_selection/selection_summary.json`：JSON 格式，包含所有 window × endpoint 组合的：
+- 输入特征数、M1/M2/M3 通过数、最终特征列表
+- 最优 penalizer、事件数、n_obs
+
+#### 本队列实际筛选结果（hadm 窗口）
+
+| 终点 | 事件数 | M1 通过 | M2 通过 | LASSO 最终 | 关键特征 |
+|------|--------|---------|---------|-----------|---------|
+| 30d  | 27  | 10 | 9  | 7  | albumin, wbc, bun, hf_af_ckd, atrial_fibrillation |
+| 90d  | 53  | 14 | 13 | 11 | albumin, wbc, hemoglobin, hf_af_ckd, omr_bmi, sodium, creatinine |
+| 1yr  | 133 | 21 | 17 | 13 | albumin, omr_bmi, hemoglobin, wbc, anchor_age, malignant_cancer, hf_af_ckd |
+| any  | 267 | 27 | 21 | 16 | albumin, omr_bmi, anchor_age, hemoglobin, wbc, hf_competing_risk, hf_af_ckd, creatinine |
+
+**运行命令**：
+```bat
+# 全部时间窗 × 全部终点
+python utils/feature_selection.py --input_dir csv/survival --output_dir csv/feature_selection
+
+# 仅处理单个窗口 + 终点
+python utils/feature_selection.py --window hadm --endpoint any
+```
+
+**可调参数**：
+```
+--p_threshold  0.10    方法 1 单变量 p 值筛选阈值
+--vif_threshold 10.0   方法 2 VIF 阈值
+--cv_folds 5           方法 3 交叉验证折数
+--dry_run              仅打印摘要，不写文件
+```
+
+**输出目录结构**：
+```
+csv/feature_selection/
+  selection_summary.json           ← 全局汇总（可视化复用）
+  hadm/
+    method1_univariate_any.csv     ← 全特征单变量 Cox 结果（HR/CI/p/C-index）
+    method1_candidates_any.csv     ← p<0.10 候选集
+    method2_vif_any.csv            ← 迭代 VIF 全程记录
+    method2_candidates_any.csv     ← VIF 过滤后候选集
+    method3_cv_any.csv             ← LASSO CV penalizer 比较
+    method3_lasso_any.csv          ← LASSO 最优模型系数
+    final_features_any.csv         ← 三步汇总（all × 3 通过状态）
+    ... (30d / 90d / 1yr 同理)
+  48h24h/ ...
+  48h48h/ ...
+```
 
 ---
 
