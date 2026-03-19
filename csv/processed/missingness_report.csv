@@ -31,7 +31,7 @@ window,column,n_total,n_missing,pct_missing,dtype,is_binary,decision,note
 48h24h,aniongap,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
 48h24h,potassium,530,6,1.13,float64,False,IMPUTE,1.1% missing → simple imputation
 48h24h,atrial_fibrillation,530,0,0.0,int64,True,KEEP,no missing values
-48h24h,gender,530,0,0.0,str,False,KEEP,no missing values
+48h24h,gender,530,0,0.0,int64,True,KEEP,no missing values
 48h24h,anchor_age,530,0,0.0,int64,False,KEEP,no missing values
 48h24h,hypertension,530,0,0.0,int64,True,KEEP,no missing values
 48h24h,diabetes_without_cc,530,0,0.0,int64,True,KEEP,no missing values
@@ -86,7 +86,7 @@ window,column,n_total,n_missing,pct_missing,dtype,is_binary,decision,note
 48h48h,aniongap,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
 48h48h,potassium,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
 48h48h,atrial_fibrillation,530,0,0.0,int64,True,KEEP,no missing values
-48h48h,gender,530,0,0.0,str,False,KEEP,no missing values
+48h48h,gender,530,0,0.0,int64,True,KEEP,no missing values
 48h48h,anchor_age,530,0,0.0,int64,False,KEEP,no missing values
 48h48h,hypertension,530,0,0.0,int64,True,KEEP,no missing values
 48h48h,diabetes_without_cc,530,0,0.0,int64,True,KEEP,no missing values
@@ -141,7 +141,7 @@ hadm,creatinine,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputati
 hadm,aniongap,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
 hadm,potassium,530,5,0.94,float64,False,IMPUTE,0.9% missing → simple imputation
 hadm,atrial_fibrillation,530,0,0.0,int64,True,KEEP,no missing values
-hadm,gender,530,0,0.0,str,False,KEEP,no missing values
+hadm,gender,530,0,0.0,int64,True,KEEP,no missing values
 hadm,anchor_age,530,0,0.0,int64,False,KEEP,no missing values
 hadm,hypertension,530,0,0.0,int64,True,KEEP,no missing values
 hadm,diabetes_without_cc,530,0,0.0,int64,True,KEEP,no missing values
