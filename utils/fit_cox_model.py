@@ -247,6 +247,7 @@ FEATURE_DISPLAY_NAMES: Dict[str, str] = {
     "cerebrovascular_disease":     "Cerebrovascular Disease",
     "hypertension":                "Hypertension",
     "atrial_fibrillation":         "Atrial Fibrillation",
+    "hf_af_ckd":                   "AF + Renal Disease",
 }
 
 
