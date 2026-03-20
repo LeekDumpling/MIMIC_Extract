@@ -31,6 +31,9 @@ Cox PH 模型拟合脚本 — HFpEF 队列（步骤 8）
 输出文件
 --------
   csv/cox_models/{window}/cox_results_{endpoint}.csv  — HR 结果表
+  csv/cox_models/figures/forest_{window}_{endpoint}.png     — Forest plot
+  csv/cox_models/figures/baseline_survival_{window}_{endpoint}.png — 基线生存曲线
+  csv/cox_models/figures/cindex_summary.png                 — C-index 汇总条形图
   csv/cox_models/cox_summary.json                     — 全组合汇总 JSON
 
 HR 结果表列
@@ -43,6 +46,7 @@ n_obs, n_events, penalizer, converged
     python utils/fit_cox_model.py --summary_json csv/feature_selection/selection_summary.json
     python utils/fit_cox_model.py --window hadm --endpoint any
     python utils/fit_cox_model.py --dry_run
+    python utils/fit_cox_model.py --no_plots   # 跳过图形输出
 """
 
 import argparse
@@ -51,7 +55,7 @@ import json
 import os
 import sys
 import warnings
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 try:
     import numpy as np
@@ -78,6 +82,16 @@ except ImportError:
     raise ImportError(
         "lifelines 是必需依赖。\n请执行：pip install lifelines"
     ) from None
+
+# matplotlib — 可选；不存在时仅禁用可视化
+try:
+    import matplotlib
+    matplotlib.use("Agg")          # 非交互后端，适合服务器/脚本运行
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    _HAS_MPL = True
+except ImportError:
+    _HAS_MPL = False
 
 # ---------------------------------------------------------------------------
 # 全局常量
@@ -326,8 +340,173 @@ def fit_cox(
         "n_events":    n_events,
         "penalizer":   penalizer_used,
         "converged":   converged,
+        "cph_obj":     cph,
         "error":       "",
     }
+
+
+# ---------------------------------------------------------------------------
+# 可视化函数
+# ---------------------------------------------------------------------------
+
+def plot_forest(
+    coef_df: "pd.DataFrame",
+    window: str,
+    endpoint: str,
+    out_path: str,
+    concordance: float,
+) -> None:
+    """
+    绘制 Forest Plot（HR ± 95% CI）并保存为 PNG。
+
+    特征按 HR 从大到小排列；p < 0.05 的特征以红色显示，其余用蓝色。
+    """
+    if not _HAS_MPL or coef_df.empty:
+        return
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        _plot_forest_inner(coef_df, window, endpoint, out_path, concordance)
+
+
+def _plot_forest_inner(
+    coef_df: "pd.DataFrame",
+    window: str,
+    endpoint: str,
+    out_path: str,
+    concordance: float,
+) -> None:
+    """内部绘图逻辑（已在 warnings.catch_warnings 上下文中调用）。"""
+    df = coef_df.sort_values("HR", ascending=True).reset_index(drop=True)
+    n = len(df)
+
+    fig_h = max(3.5, 0.5 * n + 1.5)
+    fig, ax = plt.subplots(figsize=(8, fig_h))
+
+    y_pos = np.arange(n)
+    colors = ["#d62728" if p < 0.05 else "#1f77b4"
+              for p in df["p"].fillna(1.0)]
+
+    # 水平误差线（HR 点 + 95%CI）
+    for i, row in df.iterrows():
+        lo = row["hr_lo95"] if pd.notna(row["hr_lo95"]) else row["HR"]
+        hi = row["hr_hi95"] if pd.notna(row["hr_hi95"]) else row["HR"]
+        ax.plot([lo, hi], [y_pos[i], y_pos[i]], color=colors[i],
+                linewidth=1.8, zorder=2)
+        ax.scatter(row["HR"], y_pos[i], color=colors[i],
+                   s=50, zorder=3)
+
+    # HR=1 参考线
+    ax.axvline(x=1.0, color="gray", linestyle="--", linewidth=1.0, zorder=1)
+
+    # 轴标签
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(df["feature"], fontsize=9)
+    ax.set_xlabel("风险比 HR（95% CI）", fontsize=10)
+    ax.set_title(
+        f"Forest Plot — {window}/{endpoint}\n"
+        f"C-index = {concordance:.4f}  |  "
+        f"n = {int(df['n_obs'].iloc[0])}，事件 = {int(df['n_events'].iloc[0])}",
+        fontsize=10,
+    )
+
+    # 图例
+    sig_patch   = mpatches.Patch(color="#d62728", label="p < 0.05")
+    nosig_patch = mpatches.Patch(color="#1f77b4", label="p ≥ 0.05")
+    ax.legend(handles=[sig_patch, nosig_patch], fontsize=8,
+              loc="lower right")
+
+    ax.set_xscale("log")
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter("%.2g"))
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  Forest plot → {out_path}")
+
+
+def plot_baseline_survival(
+    cph: Any,
+    window: str,
+    endpoint: str,
+    out_path: str,
+) -> None:
+    """
+    绘制 Cox 模型的基线生存函数 S₀(t) 并保存为 PNG。
+    """
+    if not _HAS_MPL or cph is None:
+        return
+
+    try:
+        bsf = cph.baseline_survival_
+        if bsf is None or bsf.empty:
+            return
+    except Exception:
+        return
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        fig, ax = plt.subplots(figsize=(6, 4))
+        t = bsf.index.values
+        s = bsf.iloc[:, 0].values
+
+        ax.step(t, s, where="post", color="#2ca02c", linewidth=2)
+        ax.fill_between(t, s, step="post", alpha=0.12, color="#2ca02c")
+        ax.set_ylim(0, 1.05)
+        ax.set_xlabel("随访时间（天）", fontsize=10)
+        ax.set_ylabel("基线生存概率 S₀(t)", fontsize=10)
+        ax.set_title(f"基线生存函数 — {window}/{endpoint}", fontsize=10)
+        ax.grid(True, linestyle=":", alpha=0.5)
+
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=150)
+        plt.close(fig)
+    print(f"  基线生存曲线 → {out_path}")
+
+
+def plot_cindex_summary(
+    summaries: List[Dict],
+    out_path: str,
+) -> None:
+    """
+    绘制各 window×endpoint 组合的 C-index 条形图并保存。
+
+    仅包含 skipped=False 的组合。
+    """
+    if not _HAS_MPL:
+        return
+
+    rows = [s for s in summaries if not s.get("skipped")]
+    if not rows:
+        return
+
+    labels = [f"{s['window']}/{s['endpoint']}" for s in rows]
+    c_vals = [s.get("concordance", float("nan")) for s in rows]
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        fig, ax = plt.subplots(figsize=(max(6, len(labels) * 1.2), 4))
+        x = np.arange(len(labels))
+        bars = ax.bar(x, c_vals, color="#ff7f0e", edgecolor="white", width=0.6)
+
+        for bar, val in zip(bars, c_vals):
+            if not np.isnan(val):
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        val + 0.005, f"{val:.3f}",
+                        ha="center", va="bottom", fontsize=8)
+
+        ax.axhline(0.5, color="gray", linestyle="--", linewidth=1.0, label="随机（0.5）")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+        ax.set_ylim(0, 1.0)
+        ax.set_ylabel("Harrell C-index", fontsize=10)
+        ax.set_title("Cox PH 模型 C-index 汇总", fontsize=11)
+        ax.legend(fontsize=8)
+
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=150)
+        plt.close(fig)
+    print(f"\nC-index 汇总图 → {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +520,7 @@ def process_combination(
     final_features: List[str],
     output_dir: str,
     dry_run: bool = False,
+    no_plots: bool = False,
 ) -> Dict:
     """
     对单个时间窗 + 终点组合拟合 Cox PH 模型，写出结果文件。
@@ -397,9 +577,28 @@ def process_combination(
     if not dry_run and not result["coef_df"].empty:
         win_dir = os.path.join(output_dir, window)
         os.makedirs(win_dir, exist_ok=True)
+
+        # CSV 结果表
         out_path = os.path.join(win_dir, f"cox_results_{endpoint}.csv")
         result["coef_df"].to_csv(out_path, index=False)
         print(f"  [{label}] 结果已写出 → {out_path}")
+
+        # 可视化
+        if not no_plots and _HAS_MPL:
+            fig_dir = os.path.join(output_dir, "figures")
+            os.makedirs(fig_dir, exist_ok=True)
+
+            plot_forest(
+                result["coef_df"],
+                window, endpoint,
+                os.path.join(fig_dir, f"forest_{window}_{endpoint}.png"),
+                result["concordance"],
+            )
+            plot_baseline_survival(
+                result.get("cph_obj"),
+                window, endpoint,
+                os.path.join(fig_dir, f"baseline_survival_{window}_{endpoint}.png"),
+            )
 
     return {
         "window":        window,
@@ -440,6 +639,8 @@ def main() -> None:
                     help="仅处理指定时间窗关键词（如 hadm、48h24h）")
     ap.add_argument("--dry_run", action="store_true",
                     help="仅打印摘要，不写出任何文件")
+    ap.add_argument("--no_plots", action="store_true",
+                    help="跳过可视化图形输出（默认：生成图形）")
     args = ap.parse_args()
 
     args.summary_json = _resolve_path(args.summary_json)
@@ -511,7 +712,9 @@ def main() -> None:
             final_features = entry.get("final_features", [])
             summary = process_combination(
                 df, window, ep, final_features,
-                args.output_dir, dry_run=args.dry_run,
+                args.output_dir,
+                dry_run=args.dry_run,
+                no_plots=args.no_plots,
             )
             all_summaries.append(summary)
 
@@ -522,6 +725,15 @@ def main() -> None:
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(all_summaries, f, ensure_ascii=False, indent=2, default=str)
         print(f"\n全局汇总 JSON → {summary_path}")
+
+        # C-index 汇总条形图
+        if not args.no_plots and _HAS_MPL:
+            fig_dir = os.path.join(args.output_dir, "figures")
+            os.makedirs(fig_dir, exist_ok=True)
+            plot_cindex_summary(
+                all_summaries,
+                os.path.join(fig_dir, "cindex_summary.png"),
+            )
 
     # ---- 打印汇总表 -------------------------------------------------------
     print(f"\n{'='*60}")
