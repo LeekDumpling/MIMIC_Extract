@@ -177,6 +177,11 @@ FALLBACK_PENALIZER = 0.05
 
 MIN_EVENTS = 10
 
+# Minimum events-per-variable (EPV) for a Cox model to be considered reliable.
+# The rule-of-thumb is 10-20 events per covariate (Peduzzi et al. 1995).
+# Models with EPV < MIN_EPV are fitted but flagged as unreliable.
+MIN_EPV = 10
+
 # ---------------------------------------------------------------------------
 # 变量显示名映射（CSV 列名 → 规范临床名称）
 # 图表 y 轴使用此名称，避免直接暴露原始表头
@@ -704,9 +709,16 @@ def process_combination(
             "final_features": final_features,
         }
 
+    epv = n_events / len(final_features) if final_features else float("inf")
+    if epv < MIN_EPV:
+        print(f"  [{label}] Warning: EPV={epv:.1f} < {MIN_EPV} "
+              f"(events={n_events}, features={len(final_features)}) "
+              f"— estimates may be unreliable (rule of 10-20 EPV not met)")
+
     print(f"  [{label}] 收敛={result['converged']}, "
           f"penalizer={result['penalizer']}, "
-          f"C-index={result['concordance']:.4f}")
+          f"C-index={result['concordance']:.4f}, "
+          f"EPV={epv:.1f}")
 
     if not dry_run and not result["coef_df"].empty:
         win_dir = os.path.join(output_dir, window)
@@ -746,6 +758,8 @@ def process_combination(
         "converged":     result["converged"],
         "final_features": final_features,
         "n_features":    len(final_features),
+        "epv":           round(epv, 1),
+        "epv_ok":        epv >= MIN_EPV,
     }
 
 
@@ -870,23 +884,34 @@ def main() -> None:
             )
 
     # ---- 打印汇总表 -------------------------------------------------------
-    print(f"\n{'='*60}")
+    print(f"\n{'='*70}")
     print("Cox PH 模型拟合汇总")
-    print(f"{'='*60}")
-    hdr = f"{'窗口+终点':<20} {'n':>6} {'事件':>6} {'特征数':>6} {'C-index':>9} {'收敛':>5} 状态"
+    print(f"{'='*70}")
+    hdr = (f"{'窗口+终点':<20} {'n':>6} {'事件':>6} {'特征数':>6} "
+           f"{'EPV':>6} {'C-index':>9} {'收敛':>5} 状态")
     print(hdr)
-    print("-" * 70)
+    print("-" * 78)
     for s in all_summaries:
         tag = f"{s.get('window','')}/{s.get('endpoint','')}"
         if s.get("skipped"):
             reason = s.get("reason", "")
-            print(f"  {tag:<20} {'—':>6} {'—':>6} {'—':>6} {'—':>9} {'—':>5} 跳过（{reason}）")
+            print(f"  {tag:<20} {'—':>6} {'—':>6} {'—':>6} "
+                  f"{'—':>6} {'—':>9} {'—':>5} 跳过（{reason}）")
         else:
             c_idx = f"{s.get('concordance', float('nan')):.4f}"
             conv  = "✓" if s.get("converged") else "✗"
-            pen   = f"pen={s.get('penalizer', 0)}" if s.get("penalizer", 0) > 0 else ""
+            epv   = s.get("epv", float("nan"))
+            epv_s = f"{epv:.1f}" if isinstance(epv, (int, float)) else "—"
+            flags = []
+            if s.get("penalizer", 0) > 0:
+                flags.append(f"pen={s.get('penalizer', 0)}")
+            if not s.get("epv_ok", True):
+                flags.append("*low_EPV")
+            flag_str = " ".join(flags)
             print(f"  {tag:<20} {s.get('n_total',0):>6} {s.get('n_events',0):>6} "
-                  f"{s.get('n_features',0):>6} {c_idx:>9} {conv:>5} {pen}")
+                  f"{s.get('n_features',0):>6} {epv_s:>6} {c_idx:>9} {conv:>5} {flag_str}")
+    print("\n  Note: *low_EPV means events-per-variable < 10 (Peduzzi 1995);"
+          " results from those models are unreliable.")
 
     print(f"\n完成。结果已保存至：{args.output_dir}/")
 

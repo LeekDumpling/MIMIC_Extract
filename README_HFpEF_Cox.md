@@ -63,12 +63,18 @@ csv/cleaned/                  # 步骤 3 — 离群值清洗后的 CSV
 csv/comorbidity/              # 步骤 4 — 合并症特征增强后的 CSV
 csv/processed/                # 步骤 5 — 插补 + 标准化后的 CSV
 csv/survival/                 # 步骤 6 — 生存终点构建后的 CSV
+csv/feature_selection/        # 步骤 7 — 特征选择结果
+csv/cox_models/               # 步骤 8 — Cox 模型结果
+csv/cox_models/ph_test/       # 步骤 9 — PH 假设检验结果
 resources/                    # MIMIC-Extract variable_ranges.csv 等资源文件
 utils/
   clean_cohort_csvs.py        # 步骤 3
   compute_comorbidity.py      # 步骤 4
   impute_normalize.py         # 步骤 5
   build_survival_endpoint.py  # 步骤 6
+  feature_selection.py        # 步骤 7
+  fit_cox_model.py            # 步骤 8
+  ph_assumption_test.py       # 步骤 9
 README_HFpEF_Cox.md           # ← 本文件
 ```
 
@@ -84,9 +90,9 @@ README_HFpEF_Cox.md           # ← 本文件
 | 4 | 合并症特征处理 | ✅ 完成 | `utils/compute_comorbidity.py` |
 | 5 | 缺失值插补 & 标准化 | ✅ 完成 | `utils/impute_normalize.py` |
 | 6 | 生存终点构建 | ✅ 完成 | `utils/build_survival_endpoint.py` |
-| 7 | 特征选择（单变量 Cox + VIF + LASSO） | ⬜ 待完成 | — |
-| 8 | Cox PH 模型拟合（终点 × 时间窗） | ⬜ 待完成 | — |
-| 9 | PH 假设检验（Schoenfeld 残差） | ⬜ 待完成 | — |
+| 7 | 特征选择（单变量 Cox + VIF + LASSO） | ✅ 完成 | `utils/feature_selection.py` |
+| 8 | Cox PH 模型拟合（终点 × 时间窗） | ✅ 完成 | `utils/fit_cox_model.py` |
+| 9 | PH 假设检验（Schoenfeld 残差） | 🔄 进行中 | `utils/ph_assumption_test.py` |
 | 10 | 模型评估（C-index、Brier Score） | ⬜ 待完成 | — |
 | 11 | 可视化（KM 曲线、森林图） | ⬜ 待完成 | — |
 
@@ -467,37 +473,129 @@ csv/feature_selection/
 
 ---
 
-### 步骤 8 — Cox PH 模型拟合（待完成）
+### 步骤 8 — Cox PH 模型拟合 ✅
 
-**计划使用库**：`lifelines`（首选）或 `scikit-survival`。
+**脚本**：`utils/fit_cox_model.py`  
+**使用库**：`lifelines`
 
-对 15 个组合（3 时间窗 × 5 终点），各评估三种模型规格：
+对每个「时间窗 × 终点」组合，读取步骤 7 的 LASSO 特征子集，
+拟合全量无正则化 Cox PH 模型（`penalizer=0`），
+收敛失败时自动使用兜底惩罚因子（`penalizer=0.05`）。
 
-| 模型 | 特征 | 用途 |
-|------|------|------|
-| 基础模型 | 年龄 + 性别 + charlson_score | 临床参考基准 |
-| 实验室模型 | 基础模型 + 保留实验室指标 | 实验室增强 |
-| 完整模型 | 步骤 7 保留的所有特征 | 最大预测能力 |
+**运行命令**：
+```bat
+# 全部组合
+python utils/fit_cox_model.py
 
-**实现示意**（每个终点 × 时间窗循环）：
-```python
-from lifelines import CoxPHFitter
-for endpoint in ['died_post_dc', 'died_30d', 'died_90d', 'died_1yr']:
-    for window in ['hadm', '48h24h', '48h48h']:
-        df_model = build_model_df(window, endpoint)
-        cph = CoxPHFitter(penalizer=0.1)
-        cph.fit(df_model, duration_col=f'time_{endpoint}', event_col=f'event_{endpoint}')
-        cph.print_summary()
+# 仅处理 hadm 窗口
+python utils/fit_cox_model.py --window hadm
+
+# 仅处理特定终点
+python utils/fit_cox_model.py --window hadm --endpoint 1yr
+
+# 不生成图形
+python utils/fit_cox_model.py --no_plots
+```
+
+**实际拟合结果汇总**：
+
+| 窗口+终点 | n | 事件 | 特征数 | EPV | C-index | 收敛 | 备注 |
+|----------|---|------|--------|-----|---------|------|------|
+| 48h24h/30d | 512 | 27 | 8 | 3.4 | 0.7695 | ✓ | *low_EPV; pen=0.05 |
+| 48h24h/90d | 512 | 53 | 5 | 10.6 | 0.6692 | ✓ | |
+| 48h24h/1yr | 512 | 133 | 8 | 16.6 | 0.6572 | ✓ | |
+| 48h24h/any | 512 | 267 | 9 | 29.7 | 0.6283 | ✓ | |
+| 48h48h/30d | — | — | — | — | — | — | 跳过（无选中特征） |
+| 48h48h/90d | 512 | 53 | 5 | 10.6 | 0.6740 | ✓ | |
+| 48h48h/1yr | 512 | 133 | 10 | 13.3 | 0.6641 | ✓ | |
+| 48h48h/any | 512 | 267 | 1 | 267.0 | 0.5839 | ✓ | 仅 1 特征入模 |
+| hadm/30d | 512 | 27 | 6 | 4.5 | 0.8039 | ✓ | *low_EPV |
+| hadm/90d | 512 | 53 | 7 | 7.6 | 0.7591 | ✓ | *low_EPV |
+| **hadm/1yr** | **512** | **133** | **9** | **14.8** | **0.6834** | **✓** | **主要参考结果** |
+| hadm/any | 512 | 267 | 11 | 24.3 | 0.6456 | ✓ | |
+
+> **EPV** = 事件数 / 特征数（events per variable）。  
+> `*low_EPV`：EPV < 10，不满足 Peduzzi et al. (1995) 的 10–20 EPV 准则，
+> 该模型 HR 估计的方差被低估，C-index 虚高，**不应作为主要结论引用**。
+
+#### EPV 评估与主要可信结果
+
+| 准则 | 不满足（EPV < 10）| 满足（EPV ≥ 10）|
+|------|-----------------|----------------|
+| 模型 | hadm/30d, hadm/90d, 48h24h/30d | hadm/1yr, hadm/any, 48h24h/90d, 48h24h/1yr, 48h48h/90d, 48h48h/1yr, 48h48h/any |
+
+**主要可信结果**：**`hadm/1yr` — C-index = 0.6834，EPV = 14.8，全量住院期特征集**
+
+- EPV = 133 / 9 = **14.8**，满足 ≥ 10 的最低准则，估计稳定可信 ✓
+- C-index 0.68 属于临床生存模型的"中等"区间（0.6–0.7），对于单纯实验室 +
+  合并症特征（无影像/基因）的队列属正常水平 ✓
+- `hadm` 窗口收集了**整个住院期**的检验均值，信息量最充分；
+  `1yr` 终点事件数充足且临床意义明确 ✓
+- **结论：该结果可接受，可继续推进 PH 假设检验（步骤 9）**
+
+**输出目录**：
+```
+csv/cox_models/
+  cox_summary.json
+  hadm/
+    cox_results_30d.csv
+    cox_results_90d.csv
+    cox_results_1yr.csv
+    cox_results_any.csv
+  48h24h/ ...
+  48h48h/ ...
+  figures/
+    forest_{window}_{endpoint}.png
+    baseline_survival_{window}_{endpoint}.png
+    cindex_summary.png
 ```
 
 ---
 
-### 步骤 9 — PH 假设检验（待完成）
+### 步骤 9 — PH 假设检验（Schoenfeld 残差）🔄
 
-**方法**：Schoenfeld 残差检验（全局及逐变量）。
-- `lifelines.statistics.proportional_hazard_test(cph, df_model)`
-- 对违反 PH 假设的变量：考虑时变系数或分层
-  （如 `strata=['hf_comorbidity_burden']`）。
+**脚本**：`utils/ph_assumption_test.py`  
+**使用库**：`lifelines.statistics.proportional_hazard_test`
+
+对 EPV ≥ 10 的全部模型，运行 Schoenfeld 残差法检验 PH 假设
+（Grambsch & Therneau 1994）。
+
+- **原假设 H₀**：给定协变量的系数在随访全程内保持不变（PH 成立）。
+- **显著结果（p < 0.05）**：该协变量存在时变效应，PH 假设可能不成立，
+  需考虑：① 分层 Cox（`strata=[variable]`）；② 时变系数模型；
+  ③ 将该变量从模型中移除。
+
+**运行命令**：
+```bat
+# 对全部 EPV>=10 模型运行 PH 检验
+python utils/ph_assumption_test.py
+
+# 仅检验 hadm/1yr（主要结果）
+python utils/ph_assumption_test.py --window hadm --endpoint 1yr
+
+# 不生成图形
+python utils/ph_assumption_test.py --no_plots
+```
+
+**前提**：须先完成步骤 8（`cox_summary.json` 必须存在）。
+
+**输出目录**：
+```
+csv/cox_models/ph_test/
+  ph_test_summary.json             ← 全局汇总（是否通过 PH 检验）
+  ph_test_{window}_{endpoint}.csv  ← 每个协变量的 Schoenfeld 检验统计量及 p 值
+  figures/
+    schoenfeld_{window}_{endpoint}.png  ← 协变量效应图
+```
+
+**违反 PH 假设时的补救措施**：
+
+| 情况 | 推荐处理 |
+|------|---------|
+| 个别协变量 p < 0.05 | 对该变量加 `strata` 或改用时变系数 |
+| 多个协变量违反 PH | 考虑参数生存模型（Weibull / log-normal）|
+| 全局检验 p < 0.05 | 优先分层 Cox；若无法分层则报告并讨论局限性 |
+
 
 ---
 
@@ -604,14 +702,17 @@ pt_missing_flag（48h 系列窗口）
 > 原始 CSV 必须包含以下新增列（v2）：`last_dischtime`、`censor_date`、`os_event`、`os_days`。
 > 这些列由 SQL 在导出时预先计算（详见步骤 6 说明）。
 
-### 步骤 3–6：Python 流水线
+### 步骤 3–8：Python 流水线
 
 ```bat
-pip install numpy pandas scikit-learn
+pip install numpy pandas scikit-learn lifelines statsmodels matplotlib
 python utils/clean_cohort_csvs.py --input_dir csv --output_dir csv/cleaned --resource_path resources
 python utils/compute_comorbidity.py --input_dir csv/cleaned --output_dir csv/comorbidity
 python utils/impute_normalize.py --input_dir csv/comorbidity --output_dir csv/processed
 python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir csv/survival
+python utils/feature_selection.py --input_dir csv/survival --output_dir csv/feature_selection
+python utils/fit_cox_model.py
+python utils/ph_assumption_test.py
 ```
 
 **各步骤说明**：
@@ -633,3 +734,5 @@ python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir c
 4. Yusuf S et al. *Effects of candesartan in patients with chronic heart failure and preserved left-ventricular ejection fraction (CHARM-Preserved).* Lancet. 2003;362(9386):777–781.
 5. Johnson AEW et al. *MIMIC-IV, a freely accessible electronic health record dataset.* Sci Data. 2023;10:1.
 6. Wang EW et al. *MIMIC-Extract: A data extraction, preprocessing, and representation pipeline for MIMIC-III.* CHIL 2020.
+7. Peduzzi P et al. *A simulation study of the number of events per variable in logistic regression analysis.* J Clin Epidemiol. 1996;49(12):1373–1379.  *(EPV ≥ 10 rule-of-thumb also applied to Cox regression)*
+8. Grambsch PM, Therneau TM. *Proportional hazards tests and diagnostics based on weighted residuals.* Biometrika. 1994;81(3):515–526.
