@@ -94,6 +94,51 @@ except ImportError:
     _HAS_MPL = False
 
 # ---------------------------------------------------------------------------
+# 中文字体配置（matplotlib）
+# ---------------------------------------------------------------------------
+
+def _setup_chinese_font() -> bool:
+    """
+    尝试配置 matplotlib 使用系统 CJK 字体。
+
+    按优先级依次尝试常见中文字体（Windows / macOS / Linux）；
+    若均不可用则返回 False，调用方回退为英文标签。
+    """
+    if not _HAS_MPL:
+        return False
+    from matplotlib import font_manager as _fm
+    # 候选字体：Windows / macOS / Linux 常见 CJK 字体
+    _candidates = [
+        "SimHei",               # Windows 黑体
+        "Microsoft YaHei",      # Windows 微软雅黑
+        "PingFang SC",          # macOS 苹方
+        "Heiti SC",             # macOS 黑体-简
+        "STHeiti",              # macOS 华文黑体
+        "Noto Sans CJK SC",     # Linux（Google Noto）
+        "Noto Sans SC",
+        "WenQuanYi Micro Hei",  # Linux 文泉驿
+        "Source Han Sans CN",   # Adobe 思源黑体
+        "FangSong",             # Windows 仿宋
+    ]
+    _available = {f.name for f in _fm.fontManager.ttflist}
+    for _font in _candidates:
+        if _font in _available:
+            matplotlib.rcParams["font.sans-serif"] = (
+                [_font] + list(matplotlib.rcParams.get("font.sans-serif", []))
+            )
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            return True
+    return False
+
+
+_CJK_AVAILABLE: bool = _setup_chinese_font()
+
+
+def _t(zh: str, en: str) -> str:
+    """根据 CJK 字体可用性返回中文或英文字符串。"""
+    return zh if _CJK_AVAILABLE else en
+
+# ---------------------------------------------------------------------------
 # 全局常量
 # ---------------------------------------------------------------------------
 
@@ -131,6 +176,78 @@ NON_FEATURE_COLS = {
 FALLBACK_PENALIZER = 0.05
 
 MIN_EVENTS = 10
+
+# ---------------------------------------------------------------------------
+# 变量显示名映射（CSV 列名 → 规范临床名称）
+# 图表 y 轴使用此名称，避免直接暴露原始表头
+# ---------------------------------------------------------------------------
+
+FEATURE_DISPLAY_NAMES: Dict[str, str] = {
+    # ── 人口学 ──────────────────────────────────────────────────────────────
+    "gender":                      "Sex (0=F, 1=M)",
+    "anchor_age":                  "Age (years)",
+    "omr_bmi":                     "BMI (kg/m\u00b2)",
+    "omr_weight_kg":               "Body Weight (kg)",
+
+    # ── 生命体征（住院）──────────────────────────────────────────────────────
+    "heart_rate":                  "Heart Rate (bpm)",
+    "sbp":                         "Systolic BP – ICU (mmHg)",
+    "dbp":                         "Diastolic BP – ICU (mmHg)",
+    "mbp":                         "Mean BP – ICU (mmHg)",
+    "omr_sbp":                     "Systolic BP – Outpatient (mmHg)",
+    "omr_dbp":                     "Diastolic BP – Outpatient (mmHg)",
+    "resp_rate":                   "Respiratory Rate (br/min)",
+    "temperature_c":               "Temperature (\u00b0C)",
+    "spo2":                        "SpO\u2082 (%)",
+
+    # ── 血常规 ───────────────────────────────────────────────────────────────
+    "hemoglobin":                  "Hemoglobin (g/dL)",
+    "hematocrit":                  "Hematocrit (%)",
+    "wbc":                         "WBC (10\u00b3/\u03bcL)",
+    "platelet":                    "Platelet Count (10\u00b3/\u03bcL)",
+
+    # ── 凝血 ─────────────────────────────────────────────────────────────────
+    "pt":                          "Prothrombin Time (s)",
+    "ptt":                         "Partial Thromboplastin Time (s)",
+    "inr":                         "INR",
+
+    # ── 生化（基础代谢）──────────────────────────────────────────────────────
+    "sodium":                      "Sodium (mEq/L)",
+    "potassium":                   "Potassium (mEq/L)",
+    "chloride":                    "Chloride (mEq/L)",
+    "bicarbonate":                 "Bicarbonate (mEq/L)",
+    "bun":                         "BUN (mg/dL)",
+    "creatinine":                  "Creatinine (mg/dL)",
+    "glucose_lab":                 "Glucose, Lab (mg/dL)",
+    "calcium":                     "Calcium (mg/dL)",
+    "albumin":                     "Albumin (g/dL)",
+    "aniongap":                    "Anion Gap (mEq/L)",
+
+    # ── 心脏 / 炎症标志物 ───────────────────────────────────────────────────
+    "troponin_t":                  "Troponin T (ng/mL)",
+    "ntprobnp":                    "NT-proBNP (pg/mL)",
+    "crp":                         "CRP (mg/L)",
+
+    # ── 合并症（Charlson）────────────────────────────────────────────────────
+    "charlson_score":              "Charlson Comorbidity Index",
+    "myocardial_infarct":          "Myocardial Infarction",
+    "peripheral_vascular_disease": "Peripheral Vascular Disease",
+    "chronic_pulmonary_disease":   "Chronic Pulmonary Disease",
+    "renal_disease":               "Renal Disease",
+    "mild_liver_disease":          "Mild Liver Disease",
+    "severe_liver_disease":        "Severe Liver Disease",
+    "malignant_cancer":            "Malignant Cancer",
+    "diabetes_with_cc":            "Diabetes with Complications",
+    "diabetes_without_cc":         "Diabetes without Complications",
+    "cerebrovascular_disease":     "Cerebrovascular Disease",
+    "hypertension":                "Hypertension",
+    "atrial_fibrillation":         "Atrial Fibrillation",
+}
+
+
+def _display_name(col: str) -> str:
+    """返回特征列的规范显示名称（未定义则原样返回列名）。"""
+    return FEATURE_DISPLAY_NAMES.get(col, col)
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +497,11 @@ def _plot_forest_inner(
     df = coef_df.sort_values("HR", ascending=True).reset_index(drop=True)
     n = len(df)
 
+    # 将原始列名替换为规范显示名称
+    display_labels = df["feature"].map(_display_name).tolist()
+
     fig_h = max(3.5, 0.5 * n + 1.5)
-    fig, ax = plt.subplots(figsize=(8, fig_h))
+    fig, ax = plt.subplots(figsize=(9, fig_h))
 
     y_pos = np.arange(n)
     colors = ["#d62728" if p < 0.05 else "#1f77b4"
@@ -399,20 +519,26 @@ def _plot_forest_inner(
     # HR=1 参考线
     ax.axvline(x=1.0, color="gray", linestyle="--", linewidth=1.0, zorder=1)
 
-    # 轴标签
+    # 轴标签（中文优先，无 CJK 字体时退回英文）
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(df["feature"], fontsize=9)
-    ax.set_xlabel("风险比 HR（95% CI）", fontsize=10)
+    ax.set_yticklabels(display_labels, fontsize=9)
+    ax.set_xlabel(_t("风险比 HR（95% CI）", "Hazard Ratio HR (95% CI)"), fontsize=10)
+
+    n_obs    = int(df["n_obs"].iloc[0])
+    n_events = int(df["n_events"].iloc[0])
     ax.set_title(
         f"Forest Plot — {window}/{endpoint}\n"
         f"C-index = {concordance:.4f}  |  "
-        f"n = {int(df['n_obs'].iloc[0])}，事件 = {int(df['n_events'].iloc[0])}",
+        + _t(f"n = {n_obs}，事件 = {n_events}",
+             f"n = {n_obs},  events = {n_events}"),
         fontsize=10,
     )
 
     # 图例
-    sig_patch   = mpatches.Patch(color="#d62728", label="p < 0.05")
-    nosig_patch = mpatches.Patch(color="#1f77b4", label="p ≥ 0.05")
+    sig_patch   = mpatches.Patch(color="#d62728",
+                                 label=_t("p < 0.05（显著）", "p < 0.05"))
+    nosig_patch = mpatches.Patch(color="#1f77b4",
+                                 label=_t("p ≥ 0.05（不显著）", "p \u2265 0.05"))
     ax.legend(handles=[sig_patch, nosig_patch], fontsize=8,
               loc="lower right")
 
@@ -422,7 +548,7 @@ def _plot_forest_inner(
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f"  Forest plot → {out_path}")
+    print(f"  Forest plot \u2192 {out_path}")
 
 
 def plot_baseline_survival(
@@ -453,15 +579,19 @@ def plot_baseline_survival(
         ax.step(t, s, where="post", color="#2ca02c", linewidth=2)
         ax.fill_between(t, s, step="post", alpha=0.12, color="#2ca02c")
         ax.set_ylim(0, 1.05)
-        ax.set_xlabel("随访时间（天）", fontsize=10)
-        ax.set_ylabel("基线生存概率 S₀(t)", fontsize=10)
-        ax.set_title(f"基线生存函数 — {window}/{endpoint}", fontsize=10)
+        ax.set_xlabel(_t("随访时间（天）", "Follow-up Time (days)"), fontsize=10)
+        ax.set_ylabel(_t("基线生存概率 S\u2080(t)", "Baseline Survival S\u2080(t)"), fontsize=10)
+        ax.set_title(
+            _t(f"基线生存函数 — {window}/{endpoint}",
+               f"Baseline Survival Function — {window}/{endpoint}"),
+            fontsize=10,
+        )
         ax.grid(True, linestyle=":", alpha=0.5)
 
         plt.tight_layout()
         plt.savefig(out_path, dpi=150)
         plt.close(fig)
-    print(f"  基线生存曲线 → {out_path}")
+    print(f"  \u57fa\u7ebf\u751f\u5b58\u66f2\u7ebf \u2192 {out_path}")
 
 
 def plot_cindex_summary(
@@ -495,18 +625,22 @@ def plot_cindex_summary(
                         val + 0.005, f"{val:.3f}",
                         ha="center", va="bottom", fontsize=8)
 
-        ax.axhline(0.5, color="gray", linestyle="--", linewidth=1.0, label="随机（0.5）")
+        ax.axhline(0.5, color="gray", linestyle="--", linewidth=1.0,
+                   label=_t("随机基准（0.5）", "Random (0.5)"))
         ax.set_xticks(x)
         ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
         ax.set_ylim(0, 1.0)
         ax.set_ylabel("Harrell C-index", fontsize=10)
-        ax.set_title("Cox PH 模型 C-index 汇总", fontsize=11)
+        ax.set_title(
+            _t("Cox PH 模型 C-index 汇总", "Cox PH Model — C-index Summary"),
+            fontsize=11,
+        )
         ax.legend(fontsize=8)
 
         plt.tight_layout()
         plt.savefig(out_path, dpi=150)
         plt.close(fig)
-    print(f"\nC-index 汇总图 → {out_path}")
+    print(f"\nC-index \u6c47\u603b\u56fe \u2192 {out_path}")
 
 
 # ---------------------------------------------------------------------------
