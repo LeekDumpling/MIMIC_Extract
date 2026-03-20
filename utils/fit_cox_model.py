@@ -183,35 +183,35 @@ MIN_EVENTS = 10
 # ---------------------------------------------------------------------------
 
 FEATURE_DISPLAY_NAMES: Dict[str, str] = {
-    # ── 人口学 ──────────────────────────────────────────────────────────────
+    # ── Demographics ─────────────────────────────────────────────────────────
     "gender":                      "Sex (0=F, 1=M)",
     "anchor_age":                  "Age (years)",
-    "omr_bmi":                     "BMI (kg/m\u00b2)",
+    "omr_bmi":                     "BMI (kg/m2)",
     "omr_weight_kg":               "Body Weight (kg)",
 
-    # ── 生命体征（住院）──────────────────────────────────────────────────────
+    # ── Vital signs (in-hospital) ────────────────────────────────────────────
     "heart_rate":                  "Heart Rate (bpm)",
-    "sbp":                         "Systolic BP – ICU (mmHg)",
-    "dbp":                         "Diastolic BP – ICU (mmHg)",
-    "mbp":                         "Mean BP – ICU (mmHg)",
-    "omr_sbp":                     "Systolic BP – Outpatient (mmHg)",
-    "omr_dbp":                     "Diastolic BP – Outpatient (mmHg)",
+    "sbp":                         "Systolic BP - ICU (mmHg)",
+    "dbp":                         "Diastolic BP - ICU (mmHg)",
+    "mbp":                         "Mean BP - ICU (mmHg)",
+    "omr_sbp":                     "Systolic BP - Outpatient (mmHg)",
+    "omr_dbp":                     "Diastolic BP - Outpatient (mmHg)",
     "resp_rate":                   "Respiratory Rate (br/min)",
-    "temperature_c":               "Temperature (\u00b0C)",
-    "spo2":                        "SpO\u2082 (%)",
+    "temperature_c":               "Temperature (C)",
+    "spo2":                        "SpO2 (%)",
 
-    # ── 血常规 ───────────────────────────────────────────────────────────────
+    # ── Complete blood count ─────────────────────────────────────────────────
     "hemoglobin":                  "Hemoglobin (g/dL)",
     "hematocrit":                  "Hematocrit (%)",
-    "wbc":                         "WBC (10\u00b3/\u03bcL)",
-    "platelet":                    "Platelet Count (10\u00b3/\u03bcL)",
+    "wbc":                         "WBC (x10^3/uL)",
+    "platelet":                    "Platelet Count (x10^3/uL)",
 
-    # ── 凝血 ─────────────────────────────────────────────────────────────────
+    # ── Coagulation ──────────────────────────────────────────────────────────
     "pt":                          "Prothrombin Time (s)",
     "ptt":                         "Partial Thromboplastin Time (s)",
     "inr":                         "INR",
 
-    # ── 生化（基础代谢）──────────────────────────────────────────────────────
+    # ── Basic metabolic panel ────────────────────────────────────────────────
     "sodium":                      "Sodium (mEq/L)",
     "potassium":                   "Potassium (mEq/L)",
     "chloride":                    "Chloride (mEq/L)",
@@ -223,12 +223,12 @@ FEATURE_DISPLAY_NAMES: Dict[str, str] = {
     "albumin":                     "Albumin (g/dL)",
     "aniongap":                    "Anion Gap (mEq/L)",
 
-    # ── 心脏 / 炎症标志物 ───────────────────────────────────────────────────
+    # ── Cardiac / inflammatory markers ───────────────────────────────────────
     "troponin_t":                  "Troponin T (ng/mL)",
     "ntprobnp":                    "NT-proBNP (pg/mL)",
     "crp":                         "CRP (mg/L)",
 
-    # ── 合并症（Charlson）────────────────────────────────────────────────────
+    # ── Comorbidities (Charlson) ─────────────────────────────────────────────
     "charlson_score":              "Charlson Comorbidity Index",
     "myocardial_infarct":          "Myocardial Infarction",
     "peripheral_vascular_disease": "Peripheral Vascular Disease",
@@ -538,7 +538,7 @@ def _plot_forest_inner(
     sig_patch   = mpatches.Patch(color="#d62728",
                                  label=_t("p < 0.05（显著）", "p < 0.05"))
     nosig_patch = mpatches.Patch(color="#1f77b4",
-                                 label=_t("p ≥ 0.05（不显著）", "p \u2265 0.05"))
+                                 label=_t("p>=0.05（不显著）", "p >= 0.05"))
     ax.legend(handles=[sig_patch, nosig_patch], fontsize=8,
               loc="lower right")
 
@@ -580,7 +580,7 @@ def plot_baseline_survival(
         ax.fill_between(t, s, step="post", alpha=0.12, color="#2ca02c")
         ax.set_ylim(0, 1.05)
         ax.set_xlabel(_t("随访时间（天）", "Follow-up Time (days)"), fontsize=10)
-        ax.set_ylabel(_t("基线生存概率 S\u2080(t)", "Baseline Survival S\u2080(t)"), fontsize=10)
+        ax.set_ylabel(_t("基线生存概率 S0(t)", "Baseline Survival S0(t)"), fontsize=10)
         ax.set_title(
             _t(f"基线生存函数 — {window}/{endpoint}",
                f"Baseline Survival Function — {window}/{endpoint}"),
