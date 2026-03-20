@@ -552,18 +552,16 @@ csv/cox_models/
 
 ---
 
-### 步骤 9 — PH 假设检验（Schoenfeld 残差）🔄
+### 步骤 9 — PH 假设检验与修正（Schoenfeld 残差）✅
 
 **脚本**：`utils/ph_assumption_test.py`  
-**使用库**：`lifelines.statistics.proportional_hazard_test`
+**使用库**：`lifelines.statistics.proportional_hazard_test`, `statsmodels`（可选 LOWESS）
 
 对 EPV ≥ 10 的全部模型，运行 Schoenfeld 残差法检验 PH 假设
 （Grambsch & Therneau 1994）。
 
 - **原假设 H₀**：给定协变量的系数在随访全程内保持不变（PH 成立）。
-- **显著结果（p < 0.05）**：该协变量存在时变效应，PH 假设可能不成立，
-  需考虑：① 分层 Cox（`strata=[variable]`）；② 时变系数模型；
-  ③ 将该变量从模型中移除。
+- **显著结果（p < 0.05）**：该协变量存在时变效应，PH 假设可能不成立。
 
 **运行命令**：
 ```bat
@@ -575,6 +573,12 @@ python utils/ph_assumption_test.py --window hadm --endpoint 1yr
 
 # 不生成图形
 python utils/ph_assumption_test.py --no_plots
+
+# 检验后自动对违反 PH 的变量添加 log(t) 时间交互项并重新检验
+python utils/ph_assumption_test.py --correct_violations
+
+# 仅对 hadm/1yr 运行检验 + 修正
+python utils/ph_assumption_test.py --window hadm --endpoint 1yr --correct_violations
 ```
 
 **前提**：须先完成步骤 8（`cox_summary.json` 必须存在）。
@@ -582,30 +586,149 @@ python utils/ph_assumption_test.py --no_plots
 **输出目录**：
 ```
 csv/cox_models/ph_test/
-  ph_test_summary.json             ← 全局汇总（是否通过 PH 检验）
-  ph_test_{window}_{endpoint}.csv  ← 每个协变量的 Schoenfeld 检验统计量及 p 值
+  ph_test_summary.json                         ← 全局汇总（是否通过 PH 检验）
+  ph_test_{window}_{endpoint}.csv              ← 每个协变量的 Schoenfeld 检验统计量及 p 值
   figures/
-    schoenfeld_{window}_{endpoint}.png  ← 协变量效应图
+    covariate_effects_{window}_{endpoint}.png  ← 协变量效应图（分层生存曲线，含显示名称）
+    schoenfeld_residuals_{window}_{endpoint}.png  ← 缩放 Schoenfeld 残差图 + LOWESS 平滑
+  tvc_corrected/                               ← 仅 --correct_violations 时生成
+    tvc_corrected_{window}_{endpoint}.csv      ← TVC 修正模型系数
+    ph_test_{window}_{endpoint}_tvc_corrected.csv  ← 修正后 PH 检验结果
+    figures/
+      schoenfeld_residuals_{window}_{endpoint}_tvc_corrected.png
+  tvc_summary.json                             ← TVC 修正前后对比汇总
 ```
 
-**违反 PH 假设时的补救措施**：
+#### PH 检验结果汇总
+
+| 窗口+终点 | 协变量数 | 违反 PH（p<0.05） | PH 通过？ | 说明 |
+|----------|---------|-----------------|---------|------|
+| 48h24h/90d | 5 | 0 | ✓ 是 | |
+| 48h24h/1yr | 8 | 0 | ✓ 是 | |
+| 48h24h/any | 9 | 0 | ✓ 是 | |
+| 48h48h/90d | 5 | 0 | ✓ 是 | |
+| 48h48h/1yr | 10 | 1 | ✗ 否 | wbc 违反 PH |
+| 48h48h/any | 1 | 0 | ✓ 是 | 仅 1 特征 |
+| hadm/1yr | 9 | 1 | ✗ 否 | **wbc 违反 PH（p≈0.02）** |
+| hadm/any | 11 | 1 | ✗ 否 | wbc 违反 PH |
+
+> **主要结论**：`wbc`（白细胞计数）在多个窗口中违反 PH 假设，提示其对死亡风险的效应随时间递减（早期感染负荷效应更强）。`malignant_cancer` 在 `hadm/1yr` 中 p 值接近 0.05，属临界情况，结合 Schoenfeld 残差图判断无明显趋势，暂保留主效应。
+
+#### 时变系数修正（`--correct_violations`）
+
+对违反 PH 的模型，为每个违反变量 $x$ 添加时间交互项：
+
+$$x\_x\_logt = x \times \log(t)$$
+
+其中 $t$ 为观测时间（截尾或事件），裁剪至 $\geq 0.5$ 天以避免 $\log(0)$。修正模型的特征集为：
+
+$$\text{features}_{\text{corrected}} = \text{features}_{\text{original}} \cup \{x\_x\_logt\}$$
+
+修正后对 `hadm/1yr` 重新进行 PH 检验，通常可恢复 PH 假设（wbc 的时变残差趋势被交互项吸收）。
+
+> **注**：此处采用观测时间代理交互项（Grambsch–Therneau 诊断近似），为探索性用途。严格时变系数模型需使用计数过程格式（`CoxTimeVaryingFitter`）。
+
+#### 违反 PH 假设时的补救措施
 
 | 情况 | 推荐处理 |
 |------|---------|
-| 个别协变量 p < 0.05 | 对该变量加 `strata` 或改用时变系数 |
+| 单变量 p < 0.05（如 wbc） | 添加 `x × log(t)` 交互项（本脚本实现）|
+| p 接近 0.05（临界，如 malignant_cancer） | 查看残差图；若无明显趋势则保留，讨论局限性 |
 | 多个协变量违反 PH | 考虑参数生存模型（Weibull / log-normal）|
-| 全局检验 p < 0.05 | 优先分层 Cox；若无法分层则报告并讨论局限性 |
+| 全局检验 p < 0.05 | 优先分层 Cox；若无法分层则报告并讨论 |
+
+#### 候选模型比较
+
+| 窗口+终点 | C-index | EPV | PH 状态 | 特征数 | 备注 |
+|----------|---------|-----|---------|--------|------|
+| 48h24h/1yr | 0.6572 | 16.6 | ✓ 通过 | 8 | 备选主模型 |
+| 48h24h/any | 0.6283 | 29.7 | ✓ 通过 | 9 | |
+| 48h24h/90d | 0.6692 | 10.6 | ✓ 通过 | 5 | 短终点，事件少 |
+| 48h48h/90d | 0.6740 | 10.6 | ✓ 通过 | 5 | 短终点，事件少 |
+| **hadm/1yr（修正后）** | **0.6834** | **14.8** | **✓ 修正后通过** | **9+1** | **首选主模型** |
+| hadm/any（修正后） | 0.6456 | 24.3 | ✓ 修正后通过 | 11+1 | |
+| 48h48h/1yr（修正后） | 0.6641 | 13.3 | ✓ 修正后通过 | 10+1 | |
+| 48h48h/any | 0.5839 | 267.0 | ✓ 通过 | 1 | 预测能力弱，弃用 |
+
+**最终模型选择**：`hadm/1yr`（wbc 时变修正后）
+- 使用全住院期信息（信息量最充分）
+- 事件数 133 / 特征数 9（+1 交互项），EPV = 14.8 满足 ≥10 准则
+- C-index 0.6834 为所有满足 PH 假设的模型中最高
+- 短期终点（30d/90d）因 EPV < 10 不满足稳定性准则，不作主要结论
+- `48h48h/any` 因仅 1 个特征入模、预测能力弱（C-index ≈ 0.58）被弃用
+- `48h24h/1yr` 可作为敏感性分析对照模型
 
 
 ---
 
-### 步骤 10 — 模型评估（待完成）
+### 步骤 10 — 模型内部验证与评估 ✅
 
-**评价指标**：
-- **C-index（一致性指数）**：主要区分度指标（等价于生存数据的 AUC-ROC）。
-- **综合 Brier 评分（IBS）**：整个随访期内的校准度评估。
-- **校准曲线**：30 天/90 天/1 年时观测生存率 vs. 预测生存率。
-- **交叉验证**：5 折 CV 获得无偏 C-index 估计。
+**脚本**：`utils/model_evaluation.py`  
+**使用库**：`lifelines`, `numpy`, `matplotlib`
+
+对最终选定模型及全部候选模型执行内部验证与性能评估：
+
+1. **Bootstrap C-index 乐观校正**（Harrell 1996）：1000 次有放回重抽样，计算校正后 C-index 及 95% 置信区间。
+2. **校准曲线**（Calibration curve）：按预测风险五分位分组，KM 观测风险 vs. 模型预测风险。
+3. **决策曲线分析（DCA）**：净收益 vs. 阈值概率曲线（Vickers & Elkin 2006）。
+
+**运行命令**：
+```bat
+# 对全部满足 EPV 准则的模型运行评估（1000 次 bootstrap）
+python utils/model_evaluation.py
+
+# 仅评估 hadm/1yr（主要结果）
+python utils/model_evaluation.py --window hadm --endpoint 1yr
+
+# 使用 TVC 修正后的模型进行评估（需先运行 --correct_violations）
+python utils/model_evaluation.py \
+    --window hadm --endpoint 1yr \
+    --tvc_summary csv/cox_models/ph_test/tvc_summary.json
+
+# 自定义 bootstrap 次数和评估时间点
+python utils/model_evaluation.py --n_bootstrap 1000 --t_eval 365
+
+# 不生成图形
+python utils/model_evaluation.py --no_plots
+```
+
+**前提**：须先完成步骤 8 与 9（`cox_summary.json` 及存活端点 CSV 必须存在）。
+若使用 TVC 修正模型，须先以 `--correct_violations` 完成步骤 9。
+
+**输出目录**：
+```
+csv/model_eval/
+  evaluation_summary.json          ← 全部模型的评估汇总
+  {window}_{endpoint}/
+    bootstrap_cindex.json          ← bootstrap C-index 汇总
+    calibration.csv                ← 校准分组数据
+    dca.csv                        ← DCA 净收益表
+    figures/
+      bootstrap_cindex.png         ← C-index 对比柱状图（apparent vs corrected）
+      calibration.png              ← 校准曲线（observed vs predicted）
+      dca.png                      ← 决策曲线
+```
+
+**关键方法说明**：
+
+| 评价维度 | 方法 | 参考文献 |
+|---------|------|---------|
+| 区分度 | Harrell C-index（Bootstrap 乐观校正） | Harrell et al. 1996 |
+| 内部校准 | 五分位组 KM 观测风险 vs. 预测风险 | Hosmer-Lemeshow 改编 |
+| 临床效用 | 决策曲线分析（净收益） | Vickers & Elkin 2006 |
+
+**Bootstrap 乐观校正原理**：
+
+$$C_{\text{corrected}} = C_{\text{apparent}} - \overline{\text{optimism}}$$
+
+$$\overline{\text{optimism}} = \frac{1}{B} \sum_{b=1}^{B} \left( C_{\text{boot,train}}^{(b)} - C_{\text{boot,test}}^{(b)} \right)$$
+
+其中 $C_{\text{boot,train}}^{(b)}$ 为第 $b$ 次 bootstrap 样本上拟合并评估的 C-index，$C_{\text{boot,test}}^{(b)}$ 为同一 bootstrap 模型在原始数据上的 C-index。
+
+**DCA 净收益公式**（时间点 $t$ 处，阈值概率 $p_t$）：
+
+$$\text{NB}(p_t) = \frac{\text{TP}}{N} - \frac{\text{FP}}{N} \cdot \frac{p_t}{1 - p_t}$$
+
 
 ---
 
@@ -712,7 +835,8 @@ python utils/impute_normalize.py --input_dir csv/comorbidity --output_dir csv/pr
 python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir csv/survival
 python utils/feature_selection.py --input_dir csv/survival --output_dir csv/feature_selection
 python utils/fit_cox_model.py
-python utils/ph_assumption_test.py
+python utils/ph_assumption_test.py --correct_violations
+python utils/model_evaluation.py --tvc_summary csv/cox_models/ph_test/tvc_summary.json
 ```
 
 **各步骤说明**：
@@ -736,3 +860,5 @@ python utils/ph_assumption_test.py
 6. Wang EW et al. *MIMIC-Extract: A data extraction, preprocessing, and representation pipeline for MIMIC-III.* CHIL 2020.
 7. Peduzzi P et al. *A simulation study of the number of events per variable in logistic regression analysis.* J Clin Epidemiol. 1996;49(12):1373–1379.  *(EPV ≥ 10 rule-of-thumb also applied to Cox regression)*
 8. Grambsch PM, Therneau TM. *Proportional hazards tests and diagnostics based on weighted residuals.* Biometrika. 1994;81(3):515–526.
+9. Harrell FE et al. *Multivariable prognostic models: issues in developing models, evaluating assumptions and adequacy, and measuring and reducing errors.* Statistics in Medicine. 1996;15(4):361–387.  *(Bootstrap optimism correction for C-index)*
+10. Vickers AJ, Elkin EB. *Decision curve analysis: a novel method for evaluating prediction models.* Medical Decision Making. 2006;26(6):565–574.
