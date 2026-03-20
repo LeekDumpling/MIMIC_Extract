@@ -279,14 +279,19 @@ def run_ph_test(
 
 
 def _plot_schoenfeld(
-    cph: "CoxPHFitter",
-    df_model: pd.DataFrame,
-    ph_df: pd.DataFrame,
-    window: str,
-    endpoint: str,
-    fig_dir: str,
+        cph: "CoxPHFitter",
+        df_model: pd.DataFrame,
+        ph_df: pd.DataFrame,
+        window: str,
+        endpoint: str,
+        fig_dir: str,
 ) -> None:
-    """Plot scaled Schoenfeld residuals for each covariate."""
+    """Plot scaled Schoenfeld residuals for each covariate.
+
+    Modified to show meaningful values for continuous variables:
+    - For binary/categorical variables: values = [0, 1]
+    - For continuous variables: values = [10th percentile, 90th percentile]
+    """
     os.makedirs(fig_dir, exist_ok=True)
     covariates = ph_df["feature"].tolist() if "feature" in ph_df.columns else []
     if not covariates:
@@ -302,11 +307,31 @@ def _plot_schoenfeld(
     for idx, cov in enumerate(covariates):
         ax = axes[idx // ncols][idx % ncols]
         try:
+            # Determine appropriate values to plot based on variable type
+            if df_model[cov].dtype in [np.float64, np.int64] and df_model[cov].nunique() > 2:
+                # Continuous variable: use 10th and 90th percentiles
+                low = df_model[cov].quantile(0.10)
+                high = df_model[cov].quantile(0.90)
+                # Guard against equal percentiles (e.g., constant variable)
+                if low == high:
+                    low = df_model[cov].mean() - df_model[cov].std()
+                    high = df_model[cov].mean() + df_model[cov].std()
+                values = [low, high]
+                legend_labels = [f"{cov} = {low:.2f}", f"{cov} = {high:.2f}"]
+            else:
+                # Binary/categorical variable
+                values = [0, 1]
+                legend_labels = [f"{cov}=0", f"{cov}=1"]
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore")
-                cph.plot_covariate_groups(cov, values=[0, 1], ax=ax)
+                # Plot the covariate groups; the function returns the same axes
+                cph.plot_covariate_groups(cov, values=values, ax=ax)
+                # Update legend with meaningful labels
+                if ax.get_legend():
+                    ax.legend(legend_labels, fontsize=8)
                 ax.set_title(cov, fontsize=9)
-        except Exception:
+        except Exception as e:
             # Fallback: just annotate that the plot failed
             ax.text(0.5, 0.5, f"{cov}\n(plot unavailable)",
                     ha="center", va="center", transform=ax.transAxes)
@@ -326,7 +351,6 @@ def _plot_schoenfeld(
     plt.savefig(out, dpi=150)
     plt.close(fig)
     print(f"  [{window}/{endpoint}] Schoenfeld plot -> {out}")
-
 
 # ---------------------------------------------------------------------------
 # main
