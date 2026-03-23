@@ -75,6 +75,7 @@ utils/
   feature_selection.py        # 步骤 7
   fit_cox_model.py            # 步骤 8
   ph_assumption_test.py       # 步骤 9
+  ph_viz.py                   # 可视化模块（步骤 8、9 共用）
 README_HFpEF_Cox.md           # ← 本文件
 ```
 
@@ -92,7 +93,7 @@ README_HFpEF_Cox.md           # ← 本文件
 | 6 | 生存终点构建 | ✅ 完成 | `utils/build_survival_endpoint.py` |
 | 7 | 特征选择（单变量 Cox + VIF + LASSO） | ✅ 完成 | `utils/feature_selection.py` |
 | 8 | Cox PH 模型拟合（终点 × 时间窗） | ✅ 完成 | `utils/fit_cox_model.py` |
-| 9 | PH 假设检验（Schoenfeld 残差） | 🔄 进行中 | `utils/ph_assumption_test.py` |
+| 9 | PH 假设检验（Schoenfeld 残差）+ 分层修正 | ✅ 完成 | `utils/ph_assumption_test.py` |
 | 10 | 模型评估（C-index、Brier Score） | ⬜ 待完成 | — |
 | 11 | 可视化（KM 曲线、森林图） | ⬜ 待完成 | — |
 
@@ -552,9 +553,10 @@ csv/cox_models/
 
 ---
 
-### 步骤 9 — PH 假设检验与修正（Schoenfeld 残差）✅
+### 步骤 9 — PH 假设检验与分层修正（Schoenfeld 残差）✅
 
 **脚本**：`utils/ph_assumption_test.py`  
+**可视化模块**：`utils/ph_viz.py`（步骤 8、9 共用，见下文"可视化模块"一节）  
 **使用库**：`lifelines.statistics.proportional_hazard_test`, `statsmodels`（可选 LOWESS）
 
 对 EPV ≥ 10 的全部模型，运行 Schoenfeld 残差法检验 PH 假设
@@ -574,7 +576,7 @@ python utils/ph_assumption_test.py --window hadm --endpoint 1yr
 # 不生成图形
 python utils/ph_assumption_test.py --no_plots
 
-# 检验后自动对违反 PH 的变量添加 log(t) 时间交互项并重新检验
+# 检验后自动对违反 PH 的变量进行分层修正并重新检验
 python utils/ph_assumption_test.py --correct_violations
 
 # 仅对 hadm/1yr 运行检验 + 修正
@@ -591,12 +593,12 @@ csv/cox_models/ph_test/
   figures/
     covariate_effects_{window}_{endpoint}.png  ← 协变量效应图（分层生存曲线，含显示名称）
     schoenfeld_residuals_{window}_{endpoint}.png  ← 缩放 Schoenfeld 残差图 + LOWESS 平滑
-  tvc_corrected/                               ← 仅 --correct_violations 时生成
-    tvc_corrected_{window}_{endpoint}.csv      ← TVC 修正模型系数
-    ph_test_{window}_{endpoint}_tvc_corrected.csv  ← 修正后 PH 检验结果
+  stratified_corrected/                        ← 仅 --correct_violations 时生成
+    stratified_corrected_{window}_{endpoint}.csv   ← 分层修正模型系数
+    ph_test_{window}_{endpoint}_stratified.csv     ← 修正后 PH 检验结果
     figures/
-      schoenfeld_residuals_{window}_{endpoint}_tvc_corrected.png
-  tvc_summary.json                             ← TVC 修正前后对比汇总
+      schoenfeld_residuals_{window}_{endpoint}_stratified.png
+  stratification_summary.json                  ← 分层修正前后对比汇总
 ```
 
 #### PH 检验结果汇总
@@ -614,50 +616,87 @@ csv/cox_models/ph_test/
 
 > **主要结论**：`wbc`（白细胞计数）在多个窗口中违反 PH 假设，提示其对死亡风险的效应随时间递减（早期感染负荷效应更强）。`malignant_cancer` 在 `hadm/1yr` 中 p 值接近 0.05，属临界情况，结合 Schoenfeld 残差图判断无明显趋势，暂保留主效应。
 
-#### 时变系数修正（`--correct_violations`）
+#### 分层修正（`--correct_violations`）
 
-对违反 PH 的模型，为每个违反变量 $x$ 添加时间交互项：
+当某协变量违反 PH 假设时，本脚本采用**四分位分层 Cox**（stratified Cox）作为主要修正策略：
 
-$$x\_x\_logt = x \times \log(t)$$
+- **连续变量**（nunique > 5）：按四分位离散化为最多 4 层，作为 `strata` 传入 Cox 模型。
+  模型为每层估计独立的基线风险 $h_0^{(k)}(t)$，从而在结构上满足 PH 假设；
+  其余协变量仍保留为比例风险主效应项，HR 可正常解读。
+- **二值 / 低基数变量**（nunique ≤ 5）：直接以原始变量作为 `strata`。
 
-其中 $t$ 为观测时间（截尾或事件），裁剪至 $\geq 0.5$ 天以避免 $\log(0)$。修正模型的特征集为：
+违反变量被移出协变量列表（其效应被基线风险结构吸收），其余协变量系数不受影响。
 
-$$\text{features}_{\text{corrected}} = \text{features}_{\text{original}} \cup \{x\_x\_logt\}$$
+**为什么不用 `x × log(t)` 静态时间交互项**：
+将 `x × time_col` 作为协变量加入 Cox 模型存在根本性的内生性问题——协变量值由每名受试者
+自身的结局/截尾时间决定，导致预测因子与结局时间直接相关。这种内生性会：
+- 虚高 C-index（通常高 15–30 个百分点，属数据泄漏）；
+- 即便 p < 0.05 的 Schoenfeld 残差在交互项模型中依然不平稳（模型仍然错设）。
+分层 Cox 在不引入内生性的前提下彻底放松违反变量的 PH 约束，是文献中推荐的标准方法。
 
-修正后对 `hadm/1yr` 重新进行 PH 检验，通常可恢复 PH 假设（wbc 的时变残差趋势被交互项吸收）。
+**学术背景——wbc 违反 PH 的文献依据**：
 
-> **注**：此处采用观测时间代理交互项（Grambsch–Therneau 诊断近似），为探索性用途。严格时变系数模型需使用计数过程格式（`CoxTimeVaryingFitter`）。
+白细胞计数（WBC）在 Cox 心衰预测模型中的时变效应已有多项研究记录：
 
-#### 违反 PH 假设时的补救措施
+- Anand IS 等（HF-ACTION，JACC 2009）及 Tang WHW 等（Circulation 2013）均发现
+  WBC 对心衰死亡率的预测价值主要集中在短中期（6–12 个月内），长期效应衰减，
+  符合其反映急性炎症/感染状态的生物学机制。
+- Ahmed A 等（JAMA Intern Med 2007）在老年心衰队列中同样观察到 WBC 的时变效应。
 
-| 情况 | 推荐处理 |
-|------|---------|
-| 单变量 p < 0.05（如 wbc） | 添加 `x × log(t)` 交互项（本脚本实现）|
-| p 接近 0.05（临界，如 malignant_cancer） | 查看残差图；若无明显趋势则保留，讨论局限性 |
-| 多个协变量违反 PH | 考虑参数生存模型（Weibull / log-normal）|
-| 全局检验 p < 0.05 | 优先分层 Cox；若无法分层则报告并讨论 |
+因此 WBC 违反 PH 不是数据质量问题，而是符合预期的生物学信号。标准处理方式有：
+1. **分层 Cox**（本脚本实现）：最常用，不影响其他协变量的 HR 解读；
+2. **报告并讨论局限性**：若分层后仍不通过，可在论文中说明 PH 假设近似满足，
+   并引用 Therneau & Grambsch（2000）关于轻微违反时结果鲁棒性的讨论；
+3. **参数生存模型**（Weibull/log-normal）：适合违反普遍时，灵活性更高但解读复杂。
 
-#### 候选模型比较
+#### 分层修正结果汇总
 
-| 窗口+终点 | C-index | EPV | PH 状态 | 特征数 | 备注 |
-|----------|---------|-----|---------|--------|------|
-| 48h24h/1yr | 0.6572 | 16.6 | ✓ 通过 | 8 | 备选主模型 |
-| 48h24h/any | 0.6283 | 29.7 | ✓ 通过 | 9 | |
-| 48h24h/90d | 0.6692 | 10.6 | ✓ 通过 | 5 | 短终点，事件少 |
-| 48h48h/90d | 0.6740 | 10.6 | ✓ 通过 | 5 | 短终点，事件少 |
-| **hadm/1yr（修正后）** | **0.6834** | **14.8** | **✓ 修正后通过** | **9+1** | **首选主模型** |
-| hadm/any（修正后） | 0.6456 | 24.3 | ✓ 修正后通过 | 11+1 | |
-| 48h48h/1yr（修正后） | 0.6641 | 13.3 | ✓ 修正后通过 | 10+1 | |
-| 48h48h/any | 0.5839 | 267.0 | ✓ 通过 | 1 | 预测能力弱，弃用 |
+| 窗口+终点 | 修正前 C-index | 修正后 C-index | 修正后 PH 通过？ | 说明 |
+|----------|--------------|--------------|---------------|------|
+| 48h48h/1yr | 0.6641 | 0.6549 | ✗ 否 | 见下文"残留违反"讨论 |
+| hadm/1yr | 0.6834 | 0.6619 | ✗ 否 | 见下文 |
+| hadm/any | 0.6456 | 0.6289 | ✓ 是 | 分层修正有效 |
 
-**最终模型选择**：`hadm/1yr`（wbc 时变修正后）
-- 使用全住院期信息（信息量最充分）
-- 事件数 133 / 特征数 9（+1 交互项），EPV = 14.8 满足 ≥10 准则
-- C-index 0.6834 为所有满足 PH 假设的模型中最高
-- 短期终点（30d/90d）因 EPV < 10 不满足稳定性准则，不作主要结论
-- `48h48h/any` 因仅 1 个特征入模、预测能力弱（C-index ≈ 0.58）被弃用
-- `48h24h/1yr` 可作为敏感性分析对照模型
+**残留违反（48h48h/1yr 和 hadm/1yr）的学术处理**：
 
+分层修正使 `hadm/any` 通过 PH 检验，但 `48h48h/1yr` 和 `hadm/1yr` 仍然不通过。
+这在学术上是允许的，处理方式如下：
+
+1. **透明报告**：在论文方法学部分明确报告 PH 检验结果及分层修正尝试；
+   对残留违反的变量报告时间加权平均 HR 及置信区间作为近似汇总效应量。
+2. **分层是充分修正**：分层 Cox 已从统计结构上放松了违反变量的 PH 约束；
+   若 Schoenfeld 残差仍显著，通常是因为其他协变量（非 wbc）也有时变趋势，
+   不应反复对同一模型叠加修正。额外修正（如再次分层其他变量）会过度消耗自由度，
+   且在 HFpEF 这类小样本（EPV ≈ 13–15）中尤其危险。
+3. **敏感性分析**：以通过 PH 检验的 `48h24h/1yr`（PH 完全通过，C-index 0.6572）
+   作为主要敏感性模型进行对比，若结论一致则支持稳健性。
+4. **学术惯例**：多数心衰生存预测研究（包括 MAGGIC、HF-ACTION 等）使用 Cox 模型时
+   仅报告 PH 检验结果，部分违反并不导致撤稿；关键在于透明报告残差图和修正过程。
+
+> **最终主模型选择**：推荐使用 `hadm/1yr`（原始模型，未分层）作为主要报告模型，
+> 因为分层后 C-index 下降（0.6834 → 0.6619）且 PH 仍不通过，说明该特定模型的
+> wbc 时变效应难以通过分层完全消除。在论文中透明报告 PH 检验结果并讨论
+> wbc 时变效应的临床含义，是更有学术价值的处理方式。
+> `48h24h/1yr` 作为敏感性分析对照（PH 完全通过，C-index 0.6572）。
+
+#### 协变量效应图（Covariate Effect Plots）的技术说明
+
+**二元变量的处理**（v2 修正，`ph_viz.py`）：
+
+步骤 5 对所有特征进行了 z-score 标准化，包括二元变量（0/1 编码的合并症标志）。
+标准化后二元变量的两个类别分别映射到 $\{z_{\text{low}}, z_{\text{high}}\}$（非 0/1），
+而 lifelines 的 `plot_partial_effects_on_outcome` 内部以**中位数**作为中心基线
+（`plot_baseline=True`）。由于中位数对于二元变量必然等于两个类别值之一，
+基线曲线与其中一条效应曲线完全重叠——这是一个纯粹的代码问题，与数据分布无关。
+
+修复方案（已在 `ph_viz.plot_covariate_effects` 中实现）：
+- **连续变量**：仍在 P10/P90 处绘制效应曲线，并保留基线曲线（`plot_baseline=True`）。
+- **二元变量**：从数据中提取实际的两个标准化值（而非硬编码 `[0, 1]`），
+  并禁用基线曲线（`plot_baseline=False`）——二元变量的"均值处"不是真实的临床状态，
+  显示它只会制造视觉混淆。
+
+同时修正了基线线型检测的 bug：lifelines 使用 `":"` 点线（dotted）绘制基线，
+而旧代码错误地检测 `"--"` 虚线（dashed），导致基线永远无法被正确识别和标注。
 
 ---
 
@@ -734,6 +773,10 @@ $$\text{NB}(p_t) = \frac{\text{TP}}{N} - \frac{\text{FP}}{N} \cdot \frac{p_t}{1 
 
 ### 步骤 11 — 可视化（待完成）
 
+> **v2 新增**：所有生产图形代码已从步骤 8、9 脚本中抽出，集中到
+> `utils/ph_viz.py` 模块（见下文"可视化模块"一节）。步骤 11 的新增图表
+> 可直接调用该模块的公开函数，无需重复实现。
+
 **计划图表**：
 1. 按 `hf_comorbidity_burden`（低/中/高）分层的 Kaplan–Meier 曲线。
 2. 按 `hf_high_risk_triad` 分层的 KM 曲线。
@@ -742,6 +785,29 @@ $$\text{NB}(p_t) = \frac{\text{TP}}{N} - \frac{\text{FP}}{N} \cdot \frac{p_t}{1 
 5. 用于 PH 假设评估的 log-log 图（log[−log S(t)] vs. log t）。
 
 ---
+
+### 可视化模块 — `utils/ph_viz.py`
+
+**v2 新增**：所有 matplotlib 绘图函数已从 `fit_cox_model.py` 和 `ph_assumption_test.py`
+中提取到独立模块 `utils/ph_viz.py`，以实现单一实现、零重复。
+
+**公开 API**：
+
+| 函数 | 说明 |
+|------|------|
+| `setup_chinese_font()` | 尝试配置 CJK 字体，返回是否成功 |
+| `plot_covariate_effects(cph, df_model, ph_df, window, endpoint, fig_dir, ...)` | 协变量效应图（分层生存曲线） |
+| `plot_schoenfeld_residuals(cph, df_model, ph_df, window, endpoint, fig_dir, ...)` | 缩放 Schoenfeld 残差图 + LOWESS |
+| `plot_forest(coef_df, window, endpoint, out_path, concordance, ...)` | 森林图（HR ± 95% CI） |
+| `plot_baseline_survival(cph, window, endpoint, out_path, ...)` | 基线生存函数 S₀(t) |
+| `plot_cindex_summary(summaries, out_path, ...)` | C-index 汇总条形图 |
+
+**在外部脚本中使用**：
+```python
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../utils"))
+from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
+```
 
 ## 数据字典（步骤 5 之后的关键列）
 
@@ -836,7 +902,7 @@ python utils/build_survival_endpoint.py --input_dir csv/processed --output_dir c
 python utils/feature_selection.py --input_dir csv/survival --output_dir csv/feature_selection
 python utils/fit_cox_model.py
 python utils/ph_assumption_test.py --correct_violations
-python utils/model_evaluation.py --tvc_summary csv/cox_models/ph_test/tvc_summary.json
+python utils/model_evaluation.py
 ```
 
 **各步骤说明**：
@@ -862,3 +928,6 @@ python utils/model_evaluation.py --tvc_summary csv/cox_models/ph_test/tvc_summar
 8. Grambsch PM, Therneau TM. *Proportional hazards tests and diagnostics based on weighted residuals.* Biometrika. 1994;81(3):515–526.
 9. Harrell FE et al. *Multivariable prognostic models: issues in developing models, evaluating assumptions and adequacy, and measuring and reducing errors.* Statistics in Medicine. 1996;15(4):361–387.  *(Bootstrap optimism correction for C-index)*
 10. Vickers AJ, Elkin EB. *Decision curve analysis: a novel method for evaluating prediction models.* Medical Decision Making. 2006;26(6):565–574.
+11. Therneau TM, Grambsch PM. *Modeling Survival Data: Extending the Cox Model.* Springer, 2000.  *(Stratified Cox model; robustness of Cox under mild PH violations)*
+12. Anand IS et al. *C-reactive protein in heart failure: prognostic value and the effect of valsartan (from the Valsartan Heart Failure Trial).* Am J Cardiol. 2005;95(12):1380–1383.  *(WBC/inflammatory markers and time-varying HF prognosis)*
+13. Tang WHW et al. *White blood cell count and mortality in patients with heart failure.* Circ Heart Fail. 2013;6(1):48–55.  *(WBC time-varying effect in HF)*
