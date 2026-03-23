@@ -64,36 +64,29 @@ except ImportError:
     sys.exit(1)
 
 try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
+    from ph_viz import (  # type: ignore
+        setup_chinese_font as _setup_chinese_font,
+        plot_covariate_effects as _ph_viz_plot_covariate_effects,
+        plot_schoenfeld_residuals as _ph_viz_plot_schoenfeld_residuals,
+        CJK_AVAILABLE as _CJK_AVAILABLE,
+    )
     _HAS_MPL = True
 except ImportError:
-    _HAS_MPL = False
-
-# ---------------------------------------------------------------------------
-# Font setup (re-use logic from fit_cox_model)
-# ---------------------------------------------------------------------------
-def _setup_chinese_font() -> bool:
-    """Try to configure a CJK font for matplotlib labels."""
-    if not _HAS_MPL:
-        return False
-    _CJK_CANDIDATES = [
-        "SimHei", "Microsoft YaHei", "WenQuanYi Micro Hei",
-        "Heiti SC", "PingFang SC", "Noto Sans CJK SC",
-        "Source Han Sans CN", "AR PL UMing CN",
-    ]
-    import matplotlib.font_manager as fm
-    available = {f.name for f in fm.fontManager.ttflist}
-    for name in _CJK_CANDIDATES:
-        if name in available:
-            plt.rcParams["font.sans-serif"] = [name, "DejaVu Sans"]
-            plt.rcParams["axes.unicode_minus"] = False
-            return True
-    return False
-
-_CJK_AVAILABLE: bool = _setup_chinese_font()
+    # ph_viz.py not found yet — try a relative path fallback
+    try:
+        import sys as _sys
+        import os as _os
+        _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+        from ph_viz import (  # type: ignore
+            setup_chinese_font as _setup_chinese_font,
+            plot_covariate_effects as _ph_viz_plot_covariate_effects,
+            plot_schoenfeld_residuals as _ph_viz_plot_schoenfeld_residuals,
+            CJK_AVAILABLE as _CJK_AVAILABLE,
+        )
+        _HAS_MPL = True
+    except ImportError:
+        _HAS_MPL = False
+        _CJK_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Feature display-name mapping
@@ -339,129 +332,16 @@ def _plot_covariate_effects(
         window: str,
         endpoint: str,
         fig_dir: str,
+        label_suffix: str = "",
 ) -> None:
-    """Plot survival curves stratified by covariate value (effect plots).
-
-    Continuous variables use 10th / 90th percentiles; binary variables use
-    0 / 1.  Display names from the canonical mapping are used in titles and
-    legends.
-    """
-    os.makedirs(fig_dir, exist_ok=True)
-    covariates = ph_df["feature"].tolist() if "feature" in ph_df.columns else []
-    if not covariates:
+    """Delegate to ph_viz.plot_covariate_effects (see ph_viz.py for details)."""
+    if not _HAS_MPL:
         return
-
-    # Build p-value lookup for border colours
-    pval_lookup: Dict[str, float] = {}
-    if "feature" in ph_df.columns and "p" in ph_df.columns:
-        for _, row in ph_df.iterrows():
-            pval_lookup[row["feature"]] = float(row["p"])
-
-    n = len(covariates)
-    ncols = min(3, n)
-    nrows = (n + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(5 * ncols, 3.5 * nrows),
-                             squeeze=False)
-
-    for idx, cov in enumerate(covariates):
-        ax = axes[idx // ncols][idx % ncols]
-        p_val = pval_lookup.get(cov)
-        violation = p_val is not None and p_val < 0.05
-        display = _display_name(cov)
-        p_str = f" (p={p_val:.3f})" if p_val is not None else ""
-        # Use ASCII pass/fail markers — Unicode check/cross glyphs are absent
-        # from many CJK fonts and render as hollow squares on those systems.
-        flag = " (FAIL)" if violation else " (OK)"
-
-        try:
-            if df_model[cov].dtype in [np.float64, np.int64] and df_model[cov].nunique() > 2:
-                low = df_model[cov].quantile(0.10)
-                high = df_model[cov].quantile(0.90)
-                if low == high:
-                    low = df_model[cov].mean() - df_model[cov].std()
-                    high = df_model[cov].mean() + df_model[cov].std()
-                values = [low, high]
-                value_labels = [
-                    f"{display} = {low:.2f}",
-                    f"{display} = {high:.2f}",
-                ]
-            else:
-                values = [0, 1]
-                value_labels = [f"{display} = 0", f"{display} = 1"]
-
-            n_lines_before = len(ax.lines)
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore")
-                cph.plot_covariate_groups(cov, values=values, ax=ax)
-
-            # Rebuild the per-axes legend so that:
-            #   • any dashed black "reference/baseline" line added by lifelines
-            #     is labelled "Baseline (mean)" rather than silently dropped;
-            #   • the remaining lines receive our display-name labels in order.
-            # Note: for binary variables whose mean ≈ 0 or ≈ 1, the baseline
-            # curve nearly coincides with the value=0 or value=1 curve — this
-            # is expected (the reference profile is close to the prevalent group).
-            new_lines = ax.lines[n_lines_before:]
-            if new_lines:
-                handles, labels = [], []
-                val_idx = 0
-                for line in new_lines:
-                    ls = line.get_linestyle()
-                    color = line.get_color()
-                    is_baseline = (
-                        ls in ("--", "dashed", (0, (5.0, 5.0)))
-                        or str(color).lower() in ("k", "black", "#000000")
-                    )
-                    handles.append(line)
-                    if is_baseline:
-                        labels.append("Baseline (mean)")
-                    else:
-                        if val_idx < len(value_labels):
-                            labels.append(value_labels[val_idx])
-                            val_idx += 1
-                        else:
-                            labels.append(line.get_label())
-                ax.legend(handles, labels, fontsize=7)
-            elif ax.get_legend():
-                ax.legend(value_labels, fontsize=7)
-
-        except Exception:
-            ax.text(0.5, 0.5, f"{display}\n(plot unavailable)",
-                    ha="center", va="center", transform=ax.transAxes)
-
-        ax.set_title(
-            f"{display}{p_str}{flag}",
-            fontsize=8,
-            color="#d62728" if violation else "black",
-        )
-        ax.tick_params(labelsize=7)
-        for spine in ax.spines.values():
-            spine.set_edgecolor("#d62728" if violation else "#cccccc")
-            spine.set_linewidth(2.0 if violation else 0.8)
-
-    for idx in range(n, nrows * ncols):
-        axes[idx // ncols][idx % ncols].set_visible(False)
-
-    import matplotlib.patches as _mpatches
-    fig.legend(
-        handles=[
-            _mpatches.Patch(color="#1f77b4", label="PH satisfied (p >= 0.05)"),
-            _mpatches.Patch(color="#d62728", label="PH violated (p < 0.05)"),
-        ],
-        loc="lower center", ncol=2, fontsize=8,
-        bbox_to_anchor=(0.5, 0.0),
+    _ph_viz_plot_covariate_effects(
+        cph, df_model, ph_df, window, endpoint, fig_dir,
+        label_suffix=label_suffix,
+        display_name_fn=_display_name,
     )
-    fig.suptitle(
-        f"Covariate Effect Plots \u2014 {window}/{endpoint}\n"
-        "(Refer to Schoenfeld residual plot for formal PH test)",
-        fontsize=10,
-    )
-    plt.tight_layout(rect=[0, 0.06, 1, 0.95])
-    out = os.path.join(fig_dir, f"covariate_effects_{window}_{endpoint}.png")
-    plt.savefig(out, dpi=150)
-    plt.close(fig)
-    print(f"  [{window}/{endpoint}] Covariate effect plot \u2192 {out}")
 
 
 def _plot_schoenfeld_residuals(
@@ -473,112 +353,14 @@ def _plot_schoenfeld_residuals(
         fig_dir: str,
         label_suffix: str = "",
 ) -> None:
-    """Plot scaled Schoenfeld residuals vs. time for each covariate.
-
-    A flat LOWESS curve indicates PH holds; a trend indicates a time-varying
-    effect.  Subplots with a significant p-value (< 0.05) are highlighted
-    with a red border and title.
-    """
-    os.makedirs(fig_dir, exist_ok=True)
-
-    try:
-        resid = cph.compute_residuals(df_model, kind="scaled_schoenfeld")
-    except Exception as exc:
-        print(f"  [{window}/{endpoint}] Cannot compute Schoenfeld residuals: {exc}")
+    """Delegate to ph_viz.plot_schoenfeld_residuals (see ph_viz.py for details)."""
+    if not _HAS_MPL:
         return
-
-    event_col = cph.event_col
-    time_col  = cph.duration_col
-
-    event_mask = df_model[event_col].astype(bool)
-    resid_ev   = resid.loc[event_mask]
-    times_ev   = df_model.loc[event_mask, time_col].values
-
-    covariates = resid.columns.tolist()
-    if not covariates:
-        return
-
-    # p-value lookup
-    pval_lookup: Dict[str, float] = {}
-    if "feature" in ph_df.columns and "p" in ph_df.columns:
-        for _, row in ph_df.iterrows():
-            pval_lookup[row["feature"]] = float(row["p"])
-
-    n = len(covariates)
-    ncols = min(3, n)
-    nrows = (n + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(5 * ncols, 3.5 * nrows),
-                             squeeze=False)
-
-    for idx, cov in enumerate(covariates):
-        ax   = axes[idx // ncols][idx % ncols]
-        p_val     = pval_lookup.get(cov)
-        violation = p_val is not None and p_val < 0.05
-        display   = _display_name(cov)
-
-        x = times_ev
-        y = resid_ev[cov].values if cov in resid_ev.columns else np.full(len(x), np.nan)
-
-        color = "#d62728" if violation else "#1f77b4"
-        ax.scatter(x, y, alpha=0.35, s=14, color=color, zorder=2)
-        ax.axhline(0, color="gray", linestyle="--", linewidth=0.8, zorder=1)
-
-        # LOWESS smoother
-        if len(x) >= 6:
-            try:
-                from statsmodels.nonparametric.smoothers_lowess import lowess
-                frac = min(0.75, 20.0 / len(x))
-                smoothed = lowess(y, x, frac=frac, it=0)
-                ax.plot(smoothed[:, 0], smoothed[:, 1],
-                        color="#d62728" if violation else "#2ca02c",
-                        linewidth=2, zorder=3)
-            except Exception:
-                pass  # statsmodels not installed — skip smooth
-
-        p_str   = f" (p={p_val:.3f})" if p_val is not None else ""
-        # ASCII markers — Unicode ✓/✗ are missing from many CJK fonts.
-        flag    = " (FAIL)" if violation else " (OK)"
-        ax.set_title(
-            f"{display}{p_str}{flag}",
-            fontsize=8,
-            color="#d62728" if violation else "black",
-        )
-        ax.set_xlabel("Time (days)", fontsize=7)
-        ax.set_ylabel("Schoenfeld\nResidual", fontsize=7)
-        ax.tick_params(labelsize=7)
-        for spine in ax.spines.values():
-            spine.set_edgecolor("#d62728" if violation else "#cccccc")
-            spine.set_linewidth(2.0 if violation else 0.8)
-
-    for idx in range(n, nrows * ncols):
-        axes[idx // ncols][idx % ncols].set_visible(False)
-
-    import matplotlib.patches as _mpatches
-    import matplotlib.lines as _mlines
-    fig.legend(
-        handles=[
-            _mpatches.Patch(color="#1f77b4", label="PH satisfied (p >= 0.05)"),
-            _mpatches.Patch(color="#d62728", label="PH violated (p < 0.05)"),
-            _mlines.Line2D([], [], color="gray", linestyle="--",
-                           linewidth=1.0, label="Reference (y = 0)"),
-        ],
-        loc="lower center", ncol=3, fontsize=8,
-        bbox_to_anchor=(0.5, 0.0),
+    _ph_viz_plot_schoenfeld_residuals(
+        cph, df_model, ph_df, window, endpoint, fig_dir,
+        label_suffix=label_suffix,
+        display_name_fn=_display_name,
     )
-    suffix_str = f" [{label_suffix}]" if label_suffix else ""
-    fig.suptitle(
-        f"Scaled Schoenfeld Residuals \u2014 {window}/{endpoint}{suffix_str}\n"
-        "(Flat LOWESS = PH holds; Trend = violation)",
-        fontsize=10,
-    )
-    plt.tight_layout(rect=[0, 0.06, 1, 0.95])
-    fname = (f"schoenfeld_residuals_{window}_{endpoint}"
-             + (f"_{label_suffix}" if label_suffix else "") + ".png")
-    out = os.path.join(fig_dir, fname)
-    plt.savefig(out, dpi=150)
-    plt.close(fig)
-    print(f"  [{window}/{endpoint}] Schoenfeld residual plot \u2192 {out}")
 
 # ---------------------------------------------------------------------------
 # PH violation correction via quartile stratification

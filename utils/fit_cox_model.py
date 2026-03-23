@@ -94,6 +94,25 @@ except ImportError:
     _HAS_MPL = False
 
 # ---------------------------------------------------------------------------
+# Visualisation helpers — delegated to ph_viz.py for a single implementation
+# ---------------------------------------------------------------------------
+try:
+    import os as _os, sys as _sys
+    _utils_dir = _os.path.dirname(_os.path.abspath(__file__))
+    if _utils_dir not in _sys.path:
+        _sys.path.insert(0, _utils_dir)
+    from ph_viz import (  # type: ignore
+        setup_chinese_font as _ph_viz_setup_chinese_font,
+        CJK_AVAILABLE as _ph_viz_cjk,
+        plot_forest as _ph_viz_plot_forest,
+        plot_baseline_survival as _ph_viz_plot_baseline_survival,
+        plot_cindex_summary as _ph_viz_plot_cindex_summary,
+    )
+    _PH_VIZ_AVAILABLE = True
+except ImportError:
+    _PH_VIZ_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
 # 中文字体配置（matplotlib）
 # ---------------------------------------------------------------------------
 
@@ -469,7 +488,7 @@ def fit_cox(
 
 
 # ---------------------------------------------------------------------------
-# 可视化函数
+# 可视化函数 — delegated to ph_viz.py
 # ---------------------------------------------------------------------------
 
 def plot_forest(
@@ -483,13 +502,22 @@ def plot_forest(
     绘制 Forest Plot（HR ± 95% CI）并保存为 PNG。
 
     特征按 HR 从大到小排列；p < 0.05 的特征以红色显示，其余用蓝色。
+    Delegates to ph_viz.plot_forest for the shared implementation.
     """
     if not _HAS_MPL or coef_df.empty:
         return
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning)
-        _plot_forest_inner(coef_df, window, endpoint, out_path, concordance)
+    if _PH_VIZ_AVAILABLE:
+        _ph_viz_plot_forest(
+            coef_df, window, endpoint, out_path, concordance,
+            display_name_fn=_display_name,
+            lang_fn=_t,
+        )
+    else:
+        # Fallback: inline implementation (kept for environments where
+        # ph_viz.py is unavailable)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            _plot_forest_inner(coef_df, window, endpoint, out_path, concordance)
 
 
 def _plot_forest_inner(
@@ -565,39 +593,40 @@ def plot_baseline_survival(
 ) -> None:
     """
     绘制 Cox 模型的基线生存函数 S₀(t) 并保存为 PNG。
+    Delegates to ph_viz.plot_baseline_survival for the shared implementation.
     """
-    if not _HAS_MPL or cph is None:
-        return
-
-    try:
-        bsf = cph.baseline_survival_
-        if bsf is None or bsf.empty:
+    if _PH_VIZ_AVAILABLE:
+        _ph_viz_plot_baseline_survival(cph, window, endpoint, out_path, lang_fn=_t)
+    else:
+        # Fallback inline implementation
+        if not _HAS_MPL or cph is None:
             return
-    except Exception:
-        return
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning)
-        fig, ax = plt.subplots(figsize=(6, 4))
-        t = bsf.index.values
-        s = bsf.iloc[:, 0].values
-
-        ax.step(t, s, where="post", color="#2ca02c", linewidth=2)
-        ax.fill_between(t, s, step="post", alpha=0.12, color="#2ca02c")
-        ax.set_ylim(0, 1.05)
-        ax.set_xlabel(_t("随访时间（天）", "Follow-up Time (days)"), fontsize=10)
-        ax.set_ylabel(_t("基线生存概率 S0(t)", "Baseline Survival S0(t)"), fontsize=10)
-        ax.set_title(
-            _t(f"基线生存函数 — {window}/{endpoint}",
-               f"Baseline Survival Function — {window}/{endpoint}"),
-            fontsize=10,
-        )
-        ax.grid(True, linestyle=":", alpha=0.5)
-
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=150)
-        plt.close(fig)
-    print(f"  \u57fa\u7ebf\u751f\u5b58\u66f2\u7ebf \u2192 {out_path}")
+        try:
+            bsf = cph.baseline_survival_
+            if bsf is None or bsf.empty:
+                return
+        except Exception:
+            return
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            fig, ax = plt.subplots(figsize=(6, 4))
+            t = bsf.index.values
+            s = bsf.iloc[:, 0].values
+            ax.step(t, s, where="post", color="#2ca02c", linewidth=2)
+            ax.fill_between(t, s, step="post", alpha=0.12, color="#2ca02c")
+            ax.set_ylim(0, 1.05)
+            ax.set_xlabel(_t("随访时间（天）", "Follow-up Time (days)"), fontsize=10)
+            ax.set_ylabel(_t("基线生存概率 S0(t)", "Baseline Survival S0(t)"), fontsize=10)
+            ax.set_title(
+                _t(f"基线生存函数 — {window}/{endpoint}",
+                   f"Baseline Survival Function — {window}/{endpoint}"),
+                fontsize=10,
+            )
+            ax.grid(True, linestyle=":", alpha=0.5)
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=150)
+            plt.close(fig)
+        print(f"  \u57fa\u7ebf\u751f\u5b58\u66f2\u7ebf \u2192 {out_path}")
 
 
 def plot_cindex_summary(
@@ -608,45 +637,44 @@ def plot_cindex_summary(
     绘制各 window×endpoint 组合的 C-index 条形图并保存。
 
     仅包含 skipped=False 的组合。
+    Delegates to ph_viz.plot_cindex_summary for the shared implementation.
     """
-    if not _HAS_MPL:
-        return
-
-    rows = [s for s in summaries if not s.get("skipped")]
-    if not rows:
-        return
-
-    labels = [f"{s['window']}/{s['endpoint']}" for s in rows]
-    c_vals = [s.get("concordance", float("nan")) for s in rows]
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning)
-        fig, ax = plt.subplots(figsize=(max(6, len(labels) * 1.2), 4))
-        x = np.arange(len(labels))
-        bars = ax.bar(x, c_vals, color="#ff7f0e", edgecolor="white", width=0.6)
-
-        for bar, val in zip(bars, c_vals):
-            if not np.isnan(val):
-                ax.text(bar.get_x() + bar.get_width() / 2,
-                        val + 0.005, f"{val:.3f}",
-                        ha="center", va="bottom", fontsize=8)
-
-        ax.axhline(0.5, color="gray", linestyle="--", linewidth=1.0,
-                   label=_t("随机基准（0.5）", "Random (0.5)"))
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
-        ax.set_ylim(0, 1.0)
-        ax.set_ylabel("Harrell C-index", fontsize=10)
-        ax.set_title(
-            _t("Cox PH 模型 C-index 汇总", "Cox PH Model — C-index Summary"),
-            fontsize=11,
-        )
-        ax.legend(fontsize=8)
-
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=150)
-        plt.close(fig)
-    print(f"\nC-index \u6c47\u603b\u56fe \u2192 {out_path}")
+    if _PH_VIZ_AVAILABLE:
+        _ph_viz_plot_cindex_summary(summaries, out_path, lang_fn=_t)
+    else:
+        # Fallback inline implementation
+        if not _HAS_MPL:
+            return
+        rows = [s for s in summaries if not s.get("skipped")]
+        if not rows:
+            return
+        labels = [f"{s['window']}/{s['endpoint']}" for s in rows]
+        c_vals = [s.get("concordance", float("nan")) for s in rows]
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            fig, ax = plt.subplots(figsize=(max(6, len(labels) * 1.2), 4))
+            x = np.arange(len(labels))
+            bars = ax.bar(x, c_vals, color="#ff7f0e", edgecolor="white", width=0.6)
+            for bar, val in zip(bars, c_vals):
+                if not np.isnan(val):
+                    ax.text(bar.get_x() + bar.get_width() / 2,
+                            val + 0.005, f"{val:.3f}",
+                            ha="center", va="bottom", fontsize=8)
+            ax.axhline(0.5, color="gray", linestyle="--", linewidth=1.0,
+                       label=_t("随机基准（0.5）", "Random (0.5)"))
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+            ax.set_ylim(0, 1.0)
+            ax.set_ylabel("Harrell C-index", fontsize=10)
+            ax.set_title(
+                _t("Cox PH 模型 C-index 汇总", "Cox PH Model — C-index Summary"),
+                fontsize=11,
+            )
+            ax.legend(fontsize=8)
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=150)
+            plt.close(fig)
+        print(f"\nC-index \u6c47\u603b\u56fe \u2192 {out_path}")
 
 
 # ---------------------------------------------------------------------------
