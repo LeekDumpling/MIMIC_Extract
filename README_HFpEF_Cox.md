@@ -598,7 +598,7 @@ csv/cox_models/ph_test/
     ph_test_{window}_{endpoint}_stratified.csv     ← 修正后 PH 检验结果
     figures/
       schoenfeld_residuals_{window}_{endpoint}_stratified.png
-  stratification_summary.json                  ← 分层修正前后对比汇总
+  stratified_correction_summary.json           ← 分层修正前后对比汇总（供 model_evaluation.py 读取）
 ```
 
 #### PH 检验结果汇总
@@ -719,10 +719,11 @@ python utils/model_evaluation.py
 # 仅评估 hadm/1yr（主要结果）
 python utils/model_evaluation.py --window hadm --endpoint 1yr
 
-# 使用 TVC 修正后的模型进行评估（需先运行 --correct_violations）
+# 使用分层修正后的模型进行评估（需先运行步骤 9 --correct_violations）
+# model_evaluation.py 自动加载 stratified_correction_summary.json
 python utils/model_evaluation.py \
     --window hadm --endpoint 1yr \
-    --tvc_summary csv/cox_models/ph_test/tvc_summary.json
+    --tvc_summary csv/cox_models/ph_test/stratified_correction_summary.json
 
 # 自定义 bootstrap 次数和评估时间点
 python utils/model_evaluation.py --n_bootstrap 1000 --t_eval 365
@@ -731,8 +732,15 @@ python utils/model_evaluation.py --n_bootstrap 1000 --t_eval 365
 python utils/model_evaluation.py --no_plots
 ```
 
-**前提**：须先完成步骤 8 与 9（`cox_summary.json` 及存活端点 CSV 必须存在）。
-若使用 TVC 修正模型，须先以 `--correct_violations` 完成步骤 9。
+> **注意（数据泄漏）**：旧版代码曾使用 `x × log(t)` 交互项修正 PH 违反
+> （即将 `feature * log(time_col)` 作为协变量）。由于 `time_col`（观测存活
+> 时间）是结局变量，该做法构成直接的**数据泄漏**——模型可从自身预测变量
+> 中恢复结局时间，导致 C-index 虚高 15–30 个百分点（如 `48h48h/1yr`：
+> 0.6641→0.8349；`hadm/1yr`：0.6834→0.9239）。当前版本已彻底移除
+> `_x_logt` 交互项的构造逻辑；若加载包含此类特征的旧版 `tvc_summary.json`，
+> 脚本会发出警告并回退到基础特征集。分层 Cox 模型（`ph_assumption_test.py
+> --correct_violations` 产生的 `stratified_correction_summary.json`）是
+> 唯一受支持的 PH 修正方法。
 
 **输出目录**：
 ```

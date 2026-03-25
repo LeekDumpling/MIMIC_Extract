@@ -188,17 +188,34 @@ def _fit_cox(
     event_col: str,
     time_col: str,
     penalizer: float = 0.0,
+    strata: Optional[List[str]] = None,
 ) -> Optional["CoxPHFitter"]:
-    """Fit Cox model; falls back to FALLBACK_PENALIZER on convergence failure."""
+    """Fit Cox model; falls back to FALLBACK_PENALIZER on convergence failure.
+
+    Parameters
+    ----------
+    strata : column names to pass as ``strata=`` to lifelines (stratified Cox).
+             When provided the model estimates a separate baseline hazard per
+             stratum; the violating covariate is absorbed into the strata
+             structure rather than as a proportional-effect covariate.
+    """
+    strata_list: List[str] = strata if strata else []
+
     def _try(pen: float) -> Optional[CoxPHFitter]:
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore")
                 cph = CoxPHFitter(penalizer=pen,
                                   baseline_estimation_method="breslow")
-                cph.fit(df_model[features + [time_col, event_col]],
-                        duration_col=time_col, event_col=event_col,
-                        show_progress=False)
+                cols = features + strata_list + [time_col, event_col]
+                fit_kwargs: Dict = {
+                    "duration_col": time_col,
+                    "event_col": event_col,
+                    "show_progress": False,
+                }
+                if strata_list:
+                    fit_kwargs["strata"] = strata_list
+                cph.fit(df_model[cols], **fit_kwargs)
             return cph
         except Exception:
             return None
@@ -210,10 +227,17 @@ def _prepare_df_model(
     features: List[str],
     event_col: str,
     time_col: str,
+    strata_cols: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, List[str]]:
-    """Drop missing, encode binary strings, return clean (df, features)."""
+    """Drop missing, encode binary strings, return clean (df, features).
+
+    ``strata_cols`` are retained in the returned DataFrame so that
+    stratified Cox models can access them during fitting and prediction.
+    """
+    strata_cols = strata_cols or []
     feat = [f for f in features if f in df.columns]
-    df_m = df[feat + [time_col, event_col]].copy().dropna()
+    extra = [c for c in strata_cols if c in df.columns and c not in feat]
+    df_m = df[feat + extra + [time_col, event_col]].copy().dropna()
     for col in list(feat):
         if df_m[col].dtype == object:
             uniq = df_m[col].dropna().unique()
@@ -222,7 +246,8 @@ def _prepare_df_model(
                 df_m[col] = df_m[col].map(mapping)
             else:
                 feat = [f for f in feat if f != col]
-    df_m = df_m[feat + [time_col, event_col]].dropna().reset_index(drop=True)
+    extra = [c for c in strata_cols if c in df_m.columns and c not in feat]
+    df_m = df_m[feat + extra + [time_col, event_col]].dropna().reset_index(drop=True)
     return df_m, feat
 
 
@@ -236,6 +261,7 @@ def bootstrap_cindex(
     time_col: str,
     n_boot: int = 1000,
     random_state: int = 42,
+    strata: Optional[List[str]] = None,
 ) -> Dict:
     """
     Compute bootstrap-optimism-corrected concordance index.
@@ -252,12 +278,16 @@ def bootstrap_cindex(
 
     Parameters
     ----------
-    df_model     : Clean model DataFrame (features + time_col + event_col).
+    df_model     : Clean model DataFrame (features + strata_cols + time + event).
     features     : List of covariate column names.
     event_col    : Binary event indicator column.
     time_col     : Observed time column.
     n_boot       : Number of bootstrap resamples.
     random_state : Seed for reproducibility.
+    strata       : Strata column names for a stratified Cox model (optional).
+                   When provided each bootstrap resample also fits a stratified
+                   model, ensuring the evaluation is consistent with the
+                   corrected (stratified) model used in production.
 
     Returns
     -------
@@ -268,7 +298,7 @@ def bootstrap_cindex(
     n   = len(df_model)
 
     # Apparent C-index on full data
-    cph_full = _fit_cox(df_model, features, event_col, time_col)
+    cph_full = _fit_cox(df_model, features, event_col, time_col, strata=strata)
     if cph_full is None:
         raise RuntimeError("Full model failed to fit — cannot run bootstrap.")
     apparent = float(cph_full.concordance_index_)
@@ -280,13 +310,16 @@ def bootstrap_cindex(
         idx       = rng.integers(0, n, size=n)
         df_boot   = df_model.iloc[idx].reset_index(drop=True)
 
-        cph_boot = _fit_cox(df_boot, features, event_col, time_col)
+        cph_boot = _fit_cox(df_boot, features, event_col, time_col, strata=strata)
         if cph_boot is None:
             continue
 
         c_train = float(cph_boot.concordance_index_)
 
-        # Evaluate bootstrap model on original data
+        # Evaluate bootstrap model on original data.
+        # predict_partial_hazard uses covariate columns only (not strata),
+        # so the partial hazard is a consistent measure of relative risk
+        # across strata for the purposes of the optimism correction.
         try:
             risk_orig = cph_boot.predict_partial_hazard(
                 df_model[features]
@@ -347,11 +380,13 @@ def calibration_table(
     time_col  = cph.duration_col
     event_col = cph.event_col
 
-    # Predicted survival → predicted risk at t_eval
+    # Predicted survival → predicted risk at t_eval.
+    # Pass the full df_model so that stratified Cox models can find their
+    # strata columns; lifelines ignores columns not used during fitting.
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore")
         surv_fn  = cph.predict_survival_function(
-            df_model[features], times=[t_eval]
+            df_model, times=[t_eval]
         )
     pred_surv = surv_fn.loc[t_eval].values
     pred_risk = 1.0 - pred_surv
@@ -461,11 +496,13 @@ def dca_table(
     event_col = cph.event_col
     n         = len(df_model)
 
-    # Predicted risk at t_eval
+    # Predicted risk at t_eval.
+    # Pass the full df_model so that stratified Cox models can find their
+    # strata columns; lifelines ignores columns not used during fitting.
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore")
         surv_fn   = cph.predict_survival_function(
-            df_model[features], times=[t_eval]
+            df_model, times=[t_eval]
         )
     pred_risk = 1.0 - surv_fn.loc[t_eval].values
 
@@ -601,6 +638,7 @@ def run_evaluation(
     no_plots: bool = False,
     n_groups: int = 5,
     random_state: int = 42,
+    strata: Optional[List[str]] = None,
 ) -> Dict:
     """
     Run the full evaluation pipeline for one window × endpoint model.
@@ -609,6 +647,13 @@ def run_evaluation(
       1. Bootstrap C-index (Harrell optimism correction).
       2. Calibration curve at ``t_eval``.
       3. Decision Curve Analysis at ``t_eval``.
+
+    Parameters
+    ----------
+    strata : Strata column names for a stratified Cox model (optional).
+             When the PH assumption was corrected via quartile stratification,
+             pass the strata columns here so that the evaluation uses exactly
+             the same model structure as the corrected production model.
 
     Returns a summary dict.
     """
@@ -620,7 +665,7 @@ def run_evaluation(
     fig_dir = os.path.join(out_dir, "figures")
 
     # ---- 1. Fit full model --------------------------------------------------
-    cph = _fit_cox(df_model, features, event_col, time_col)
+    cph = _fit_cox(df_model, features, event_col, time_col, strata=strata)
     if cph is None:
         print(f"  [{label}] Model fit failed. Skipping evaluation.")
         return {"window": window, "endpoint": endpoint, "error": "fit_failed"}
@@ -632,7 +677,7 @@ def run_evaluation(
     print(f"  [{label}] Running {n_boot} bootstrap resamples …")
     boot = bootstrap_cindex(
         df_model, features, event_col, time_col,
-        n_boot=n_boot, random_state=random_state,
+        n_boot=n_boot, random_state=random_state, strata=strata,
     )
     print(
         f"  [{label}] Bootstrap: apparent={boot['apparent_cindex']:.4f}, "
@@ -706,11 +751,12 @@ def main() -> None:
                     default="csv/cox_models/cox_summary.json",
                     help="Path to Cox summary JSON from step 8.")
     ap.add_argument("--tvc_summary",
-                    default="csv/cox_models/ph_test/tvc_summary.json",
-                    help="Optional path to TVC correction summary JSON "
+                    default="csv/cox_models/ph_test/stratified_correction_summary.json",
+                    help="Optional path to stratification correction summary JSON "
                          "(produced by ph_assumption_test.py "
                          "--correct_violations). When present, evaluates the "
-                         "TVC-corrected model for violating windows.")
+                         "stratification-corrected model for violating windows. "
+                         "Default: csv/cox_models/ph_test/stratified_correction_summary.json")
     ap.add_argument("--survival_dir", default="csv/survival",
                     help="Directory with survival endpoint CSVs.")
     ap.add_argument("--raw_dir", default="csv",
@@ -750,7 +796,7 @@ def main() -> None:
     with open(args.cox_summary, "r", encoding="utf-8") as f:
         cox_summaries = json.load(f)
 
-    # ---- Load optional TVC summary -----------------------------------------
+    # ---- Load optional stratification-correction summary -------------------
     tvc_map: Dict[str, Dict] = {}  # key: f"{window}/{endpoint}"
     tvc_summary_path = _resolve_path(args.tvc_summary)
     if os.path.exists(tvc_summary_path):
@@ -760,7 +806,7 @@ def main() -> None:
             if rec.get("tvc_run"):
                 key = f"{rec['window']}/{rec['endpoint']}"
                 tvc_map[key] = rec
-        print(f"Loaded {len(tvc_map)} TVC-corrected model(s) from "
+        print(f"Loaded {len(tvc_map)} stratification-corrected model(s) from "
               f"{tvc_summary_path}")
 
     # ---- Filter models ------------------------------------------------------
@@ -810,27 +856,36 @@ def main() -> None:
             df_base[event_col].notna() & df_base[time_col].notna()
         ].reset_index(drop=True)
 
-        # Determine features: use TVC-corrected if available
+        # Determine features and strata: use stratification-corrected if available.
+        # NOTE: The old ``x * log(t)`` TVC interaction approach is intentionally
+        # NOT supported here.  That method constructs a predictor from the
+        # observed outcome time (``feature * log(time_col)``), which creates
+        # direct data leakage — the model can trivially recover the outcome
+        # variable from its own predictors, spuriously inflating the C-index
+        # by 15–30 percentage points.  The correct approach is quartile
+        # stratification, which is what ``ph_assumption_test.py`` now produces.
         tvc_rec = tvc_map.get(label)
-        eval_features = features
+        eval_features: List[str] = list(features)
+        eval_strata: List[str] = []
         if tvc_rec:
-            tvc_feats = tvc_rec.get("tvc_features", features)
-            # Build interaction columns
-            df_base_tvc = df_base.copy()
-            for feat in tvc_feats:
-                if feat.endswith("_x_logt"):
-                    base = feat[: -len("_x_logt")]
-                    if base in df_base_tvc.columns:
-                        df_base_tvc[feat] = (
-                            df_base_tvc[base]
-                            * np.log(df_base_tvc[time_col].clip(lower=0.5))
-                        )
-            df_base = df_base_tvc
-            eval_features = tvc_feats
-            print(f"  Using TVC-corrected features: {eval_features}")
+            method = tvc_rec.get("correction_method", "")
+            if method == "stratification":
+                # Violating covariate was moved to strata; use remaining features
+                eval_features = list(tvc_rec.get("remaining_features", features))
+                eval_strata   = list(tvc_rec.get("strata_cols", []))
+                print(f"  Stratification-corrected model: "
+                      f"features={eval_features}, strata={eval_strata}")
+            else:
+                # Unknown correction type (e.g. legacy _x_logt): ignore.
+                # Using outcome time as a predictor (endogenous interaction)
+                # inflates C-index and is methodologically invalid.
+                print(f"  WARNING: Ignoring unrecognised correction method "
+                      f"'{method}' for {label} — using base features to avoid "
+                      f"data leakage.")
 
         df_model, eval_features = _prepare_df_model(
-            df_base, eval_features, event_col, time_col
+            df_base, eval_features, event_col, time_col,
+            strata_cols=eval_strata,
         )
 
         out_dir = os.path.join(args.output_dir, f"{window}_{endpoint}")
@@ -847,6 +902,7 @@ def main() -> None:
             no_plots=args.no_plots,
             n_groups=args.n_groups,
             random_state=args.random_state,
+            strata=eval_strata,
         )
         all_summaries.append(summary)
 
