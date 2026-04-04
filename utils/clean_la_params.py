@@ -136,6 +136,9 @@ THRESH_FLAG: float = 0.20   # ≥ 20% 缺失 → 填补 + 添加 _missing_flag �
 _NO_NORM_COLS = {"video_prefix", "subject_id", "study_id", "source_group",
                  "keyframe_method"}
 
+# 正态性判断：|偏度| ≤ 此阈值 → 近正态（与 la_analysis.py 保持一致）
+_SKEW_THRESH: float = 1.0
+
 
 # ---------------------------------------------------------------------------
 # 辅助函数
@@ -571,7 +574,7 @@ def normalise_wide(
         col_vals = df[col].values.astype(float)
         valid_mask = ~np.isnan(col_vals)
 
-        if abs(skew) > 1.0:
+        if abs(skew) > _SKEW_THRESH:
             transform = "log1p + z-score"
             col_vals[valid_mask] = np.log1p(np.clip(col_vals[valid_mask], 0, None))
         else:
@@ -629,9 +632,6 @@ def process_la_params(
     """
     if hard_filter_codes is None:
         hard_filter_codes = QC_HARD_FILTER_CODES
-
-    global THRESH_DROP
-    THRESH_DROP = thresh_drop
 
     print(f"\n{'='*60}")
     print("LA 参数清洗流程开始")

@@ -67,6 +67,8 @@ except (ImportError, AttributeError, ValueError):
         "numpy 和 pandas 是必需依赖。\n请执行：pip install numpy pandas"
     ) from None
 
+import json
+
 try:
     from scipy import stats as _scipy_stats
     _SCIPY_AVAILABLE = True
@@ -198,8 +200,7 @@ def merge_datasets(
     kine_cols  = set(df_kine.columns)  - set(kine_keys)
     overlap    = morph_cols & kine_cols
     if overlap:
-        df_kine = df_kine.rename(columns={c: c + "_kine" for c in overlap
-                                           if c not in kine_keys})
+        df_kine = df_kine.rename(columns={c: c + "_kine" for c in overlap})
 
     df_img = pd.merge(df_morph, df_kine, on=morph_keys, how="outer",
                       suffixes=("", "_kine"))
@@ -550,7 +551,6 @@ def group_comparison(
             test_name = f"error({exc})"
 
         # 每组简要统计
-        import json
         grp_stats = {}
         for glbl, gsmp in zip(g_labels, g_samples):
             gseries = pd.Series(gsmp)
