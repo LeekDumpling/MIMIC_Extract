@@ -66,6 +66,12 @@ csv/survival/                 # 步骤 6 — 生存终点构建后的 CSV
 csv/feature_selection/        # 步骤 7 — 特征选择结果
 csv/cox_models/               # 步骤 8 — Cox 模型结果
 csv/cox_models/ph_test/       # 步骤 9 — PH 假设检验结果
+csv/la_params/                # LA 参数原始文件（来自 EchoGraphs 模块）
+  la_morphology_results.csv   #   形态学参数长表
+  la_kinematic_stats.csv      #   运动学参数长表
+  la_analysis_qc.csv          #   质量控制与元数据表
+csv/la_params/processed/      # 步骤 A1 — LA 参数清洗输出（宽表）
+csv/la_analysis/              # 步骤 A2 — LA × 临床联合分析输出
 resources/                    # MIMIC-Extract variable_ranges.csv 等资源文件
 utils/
   clean_cohort_csvs.py        # 步骤 3
@@ -76,6 +82,8 @@ utils/
   fit_cox_model.py            # 步骤 8
   ph_assumption_test.py       # 步骤 9
   ph_viz.py                   # 可视化模块（步骤 8、9 共用）
+  clean_la_params.py          # 步骤 A1 — LA 影像参数清洗
+  la_analysis.py              # 步骤 A2 — LA × MIMIC 临床参数联合分析
 README_HFpEF_Cox.md           # ← 本文件
 ```
 
@@ -94,8 +102,10 @@ README_HFpEF_Cox.md           # ← 本文件
 | 7 | 特征选择（单变量 Cox + VIF + LASSO） | ✅ 完成 | `utils/feature_selection.py` |
 | 8 | Cox PH 模型拟合（终点 × 时间窗） | ✅ 完成 | `utils/fit_cox_model.py` |
 | 9 | PH 假设检验（Schoenfeld 残差）+ 分层修正 | ✅ 完成 | `utils/ph_assumption_test.py` |
-| 10 | 模型评估（C-index、Brier Score） | ⬜ 待完成 | — |
-| 11 | 可视化（KM 曲线、森林图） | ⬜ 待完成 | — |
+| 10 | 模型评估（C-index、Brier Score） | ✅ 完成 | `utils/model_evaluation.py` |
+| 11 | 可视化（KM 曲线、森林图） | ⬜ 待完成 | `utils/ph_viz.py` |
+| A1 | LA 影像参数清洗（EchoGraphs → 宽表） | ✅ 完成 | `utils/clean_la_params.py` |
+| A2 | LA × MIMIC 临床参数联合统计分析 | ✅ 完成 | `utils/la_analysis.py` |
 
 ---
 
@@ -817,6 +827,152 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../utils"))
 from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 ```
 
+---
+
+### 步骤 A1 — LA 影像参数清洗（`utils/clean_la_params.py`）
+
+**数据来源**：EchoGraphs 模块生成的三张左心房（LA）参数文件（放置于 `csv/la_params/`）：
+
+| 输入文件 | 说明 |
+|----------|------|
+| `la_morphology_results.csv` | 形态学参数长表（主键：`video_prefix + parameter_name`） |
+| `la_kinematic_stats.csv` | 运动学 / 应变参数长表（主键：`video_prefix + parameter_name + sub_item`） |
+| `la_analysis_qc.csv` | 质量控制与元数据表（必须同时使用） |
+
+**重要语义约定**：
+- `max_idx → LAVmax`，`min_idx → LAVmin`；**不**按旧 `ED/ES` 假设映射
+- 所有 `value` 空字符串均表示"当前不可用"，绝不能按 0 处理
+- 所有参数基于模型连续 28 点轮廓，非人工真值直接测量
+
+**清洗步骤**：
+
+| 步骤 | 方法 |
+|------|------|
+| QC 硬过滤 | 含 `missing_spacing` 或 `analysis_error` 的视频整体移除 |
+| 行级软过滤 | 按每行 `status` 字段，将受影响的参数值置为 NaN（不填 0） |
+| 生理范围检查 | 超出范围的值置为 NaN，行保留（其他参数不受影响） |
+| 长表 → 宽表 | 形态表按 `parameter_name` pivot；运动表按 `parameter_name__sub_item` pivot |
+| 缺失列剔除 | 列缺失率 ≥ 30% → 整列剔除（论文约定） |
+| 影像缺失策略 | 算法失败导致的缺失直接保留 NaN（不填补），下游分析时按需 `dropna` |
+| Z-score 标准化 | `\|偏度\| > 1.0` 先 `log1p`，再 `StandardScaler` |
+
+#### 生理范围检查所用文件及位置
+
+> **与 `clean_cohort_csvs.py` 不同**：MIMIC 临床参数的范围来自外部文件  
+> `resources/variable_ranges.csv`（MIMIC-Extract 项目随附），  
+> LA 影像参数的范围**直接硬编码**在  
+> **`utils/clean_la_params.py`，第 84–118 行，字典 `LA_PHYSIO_RANGES`**。  
+>
+> 原因：LA 参数来自 EchoGraphs 模型输出，`variable_ranges.csv` 中无对应条目；  
+> 范围参考 ASE/EACVI 超声心动图指南及发表文献，以识别分割失败或轮廓跟踪异常造成的极端值。
+
+当前 `LA_PHYSIO_RANGES` 定义的范围如下：
+
+| 参数 | 下界 | 上界 | 单位 |
+|------|------|------|------|
+| `LAVmax` | 10 | 200 | mL |
+| `LAVI` | 5 | 120 | mL/m² |
+| `LAVmin` | 5 | 150 | mL |
+| `LAVmin-i` | 2 | 90 | mL/m² |
+| `LAEF` | 10 | 95 | % |
+| `LAD-long` | 1.5 | 8.0 | cm |
+| `LAD-trans` | 1.0 | 7.0 | cm |
+| `LA ellipticity` | 0 | 5 | — |
+| `LA circularity` | 0 | 2 | — |
+| `LA sphericity index` | 0 | 2 | — |
+| `LA eccentricity index` | 0 | 1 | — |
+| `MAT area` | 1 | 20 | cm² |
+| `TGAR` | 0 | 5 | — |
+| `LASr` | −5 | 60 | % |
+| `LASrR` | −10 | 10 | s⁻¹ |
+| `GCS` / `LS` / `AS` / `LASct` | −60 | 5 | % |
+| 各速率类（`GCSR`/`LSR`/`ASR` 等） | −10 | 10 | s⁻¹ |
+| `Annular expansion rate` | −10 | 10 | cm/s |
+| `Longitudinal stretching rate` | −10 | 10 | cm/s |
+
+若需修改范围，直接编辑 `utils/clean_la_params.py` 中的 `LA_PHYSIO_RANGES` 字典即可。
+
+**输出文件**（默认 `csv/la_params/processed/`）：
+
+| 文件 | 说明 |
+|------|------|
+| `la_morphology_wide.csv` | 形态学参数宽表（主键：`video_prefix`） |
+| `la_kinematic_wide.csv` | 运动学参数宽表（主键：`video_prefix`） |
+| `la_params_qc_filtered.csv` | QC 过滤后元数据表（供追溯） |
+| `la_params_missingness_morph.csv` | 形态表缺失率报告 |
+| `la_params_missingness_kine.csv` | 运动表缺失率报告 |
+| `la_params_feature_decisions.csv` | 特征决策汇总（保留 / 剔除） |
+
+**运行命令**：
+
+```bat
+python utils/clean_la_params.py ^
+  --morphology csv/la_params/la_morphology_results.csv ^
+  --kinematic  csv/la_params/la_kinematic_stats.csv ^
+  --qc         csv/la_params/la_analysis_qc.csv ^
+  --output_dir csv/la_params/processed
+
+:: 仅生成缺失率报告（不写输出文件）：
+python utils/clean_la_params.py --report_only
+```
+
+---
+
+### 步骤 A2 — LA × MIMIC 临床参数联合分析（`utils/la_analysis.py`）
+
+**输入**：
+
+| 文件 | 来源 |
+|------|------|
+| `csv/processed/hfpef_cohort_win_*_processed.csv` | 步骤 5（临床宽表，含插补 + 标准化） |
+| `csv/la_params/processed/la_morphology_wide.csv` | 步骤 A1 |
+| `csv/la_params/processed/la_kinematic_wide.csv` | 步骤 A1 |
+| `csv/la_params/processed/la_params_qc_filtered.csv` | 步骤 A1（QC 元数据） |
+
+**分析内容**（依次执行）：
+
+| 分析 | 方法 |
+|------|------|
+| **数据合并** | 按 `subject_id` inner join，可附加 QC 元数据 |
+| **描述性统计** | 近正态→ 均值 ± SD；偏态→ 中位数 [IQR]；二值→ 频次（%）；支持按分组列分层 |
+| **相关性分析** | 两列均近正态 → Pearson；否则 → Spearman；输出相关矩阵 CSV + 热图 PNG |
+| **FDR 多重校正** | 所有 p 值采用 Benjamini–Hochberg 方法校正（`statsmodels.multipletests`） |
+| **VIF 共线性检验** | 迭代剔除 VIF > 10 的特征；对 LA 参数与临床变量分别运行 |
+| **组间比较** | 两组连续变量：t 检验 / Welch / Mann–Whitney U；多组：ANOVA / Kruskal–Wallis；分类：χ² / Fisher 精确检验；BH-FDR 校正 |
+| **分布可视化** | LA 参数分布直方图（含 KDE），便于识别极端值 |
+
+**输出文件**（默认 `csv/la_analysis/`）：
+
+| 文件 | 说明 |
+|------|------|
+| `merged_dataset.csv` | 合并后完整数据集 |
+| `descriptive_stats.csv` | 各变量描述性统计 |
+| `correlation_la_clinical.csv` | LA 参数 × 临床变量相关系数长表（含 FDR 校正 p 值） |
+| `correlation_matrix.csv` | 相关系数宽矩阵（行：LA 参数，列：临床变量） |
+| `correlation_la_clinical.png` | 相关热图 |
+| `la_distributions.png` | LA 参数分布图 |
+| `vif_report_la.csv` | LA 参数 VIF 报告 |
+| `vif_report_clinical.csv` | 临床变量 VIF 报告 |
+| `group_comparison_{col}.csv` | 每个分组列的组间比较结果（含 FDR 校正 p 值） |
+
+**运行命令**：
+
+```bat
+:: 基本用法（以 hadm 时间窗为例，按院内死亡分组）
+python utils/la_analysis.py ^
+  --clinical_csv csv/processed/hfpef_cohort_win_hadm_processed.csv ^
+  --morph_csv    csv/la_params/processed/la_morphology_wide.csv ^
+  --kine_csv     csv/la_params/processed/la_kinematic_wide.csv ^
+  --qc_csv       csv/la_params/processed/la_params_qc_filtered.csv ^
+  --output_dir   csv/la_analysis ^
+  --group_col    died_inhosp os_event
+
+:: 不生成图形（服务器环境）：
+python utils/la_analysis.py ... --no_plots
+```
+
+---
+
 ## 数据字典（步骤 5 之后的关键列）
 
 ### 标识符（不用于建模）
@@ -881,6 +1037,41 @@ omr_weight_kg、omr_bmi、omr_sbp、omr_dbp
 albumin_missing_flag（hadm 窗口）、ptt_missing_flag、inr_missing_flag、
 pt_missing_flag（48h 系列窗口）
 
+### LA 影像参数（步骤 A1 宽表输出，已标准化）
+
+形态学参数（来自 `la_morphology_wide.csv`，列名为安全化后的 `parameter_name`）：
+
+| 列名 | 原始参数名 | 单位 | 关键帧 |
+|------|-----------|------|--------|
+| `LAVmax` | LAVmax | mL | LAVmax 关键帧 |
+| `LAVI` | LAVI | mL/m² | LAVmax 关键帧 |
+| `LAVmin` | LAVmin | mL | LAVmin 关键帧 |
+| `LAVmin-i` | LAVmin-i | mL/m² | LAVmin 关键帧 |
+| `LAEF` | LAEF | % | LAVmax + LAVmin 组合 |
+| `LAD-long` | LAD-long | cm | LAVmin 关键帧 |
+| `LAD-trans` | LAD-trans | cm | LAVmin 关键帧 |
+| `LA_ellipticity` | LA ellipticity | — | LAVmax 关键帧 |
+| `LA_circularity` | LA circularity | — | LAVmax 关键帧 |
+| `LA_sphericity_index` | LA sphericity index | — | LAVmax 关键帧 |
+| `LA_eccentricity_index` | LA eccentricity index | — | LAVmax 关键帧 |
+| `MAT_area` | MAT area | cm² | LAVmax 关键帧 |
+| `TGAR` | TGAR | — | LAVmax 关键帧 |
+
+运动学参数（来自 `la_kinematic_wide.csv`，列名格式为 `parameter_name__sub_item`）：
+
+| 列名示例 | 说明 | 单位 |
+|----------|------|------|
+| `LASr__mean` | 左心房纵向储备应变（均值） | % |
+| `LASrR__peak` / `LASrR__mean` | 左心房纵向储备应变率（峰值/均值） | s⁻¹ |
+| `GCS__peak` / `GCS__mean` / `GCS__range` | 整体圆周应变 | % |
+| `Annular_expansion_rate__peak_expansion` | 瓣环扩张率峰值 | cm/s |
+| `MAT_area__peak` / `MAT_area__mean` | 二尖瓣环面积 | cm² |
+| `TGAR__mean` / `TGAR__peak` | TGAR（峰值/均值） | — |
+
+> **注意**：`value` 空字符串在清洗时已转换为 NaN；  
+> 列缺失率 ≥ 30% 的参数已被剔除；  
+> 速率类参数依赖真实 fps（fps 缺失时该参数为 NaN，不可填 0）。
+
 ---
 
 ## 完整流水线复现
@@ -899,7 +1090,7 @@ pt_missing_flag（48h 系列窗口）
 > 原始 CSV 必须包含以下新增列（v2）：`last_dischtime`、`censor_date`、`os_event`、`os_days`。
 > 这些列由 SQL 在导出时预先计算（详见步骤 6 说明）。
 
-### 步骤 3–8：Python 流水线
+### 步骤 3–8：Python 流水线（MIMIC 临床分析）
 
 ```bat
 pip install numpy pandas scikit-learn lifelines statsmodels matplotlib
@@ -921,6 +1112,36 @@ python utils/model_evaluation.py
 | `compute_comorbidity.py` | `csv/cleaned/` | `csv/comorbidity/` — CCI 重计算、HFpEF 专项合并症特征 |
 | `impute_normalize.py` | `csv/comorbidity/` | `csv/processed/` — 缺失值插补、标准化（结局列保持原样） |
 | `build_survival_endpoint.py` | `csv/processed/` | `csv/survival/` — Cox 衍生终点列（`event_*/time_*`） |
+
+### 步骤 A1–A2：LA 影像参数清洗与联合分析
+
+> **前提**：将 EchoGraphs 输出的三张 CSV 放置于 `csv/la_params/`，  
+> 文件名须为 `la_morphology_results.csv`、`la_kinematic_stats.csv`、`la_analysis_qc.csv`。
+
+```bat
+:: A1 — LA 参数清洗
+python utils/clean_la_params.py ^
+  --morphology csv/la_params/la_morphology_results.csv ^
+  --kinematic  csv/la_params/la_kinematic_stats.csv ^
+  --qc         csv/la_params/la_analysis_qc.csv ^
+  --output_dir csv/la_params/processed
+
+:: A2 — LA × MIMIC 临床参数联合分析（以 hadm 时间窗为例）
+python utils/la_analysis.py ^
+  --clinical_csv csv/processed/hfpef_cohort_win_hadm_processed.csv ^
+  --morph_csv    csv/la_params/processed/la_morphology_wide.csv ^
+  --kine_csv     csv/la_params/processed/la_kinematic_wide.csv ^
+  --qc_csv       csv/la_params/processed/la_params_qc_filtered.csv ^
+  --output_dir   csv/la_analysis ^
+  --group_col    died_inhosp os_event
+```
+
+**各步骤说明**：
+
+| 命令 | 输入 | 输出 |
+|------|------|------|
+| `clean_la_params.py` | `csv/la_params/` | `csv/la_params/processed/` — QC 过滤、生理范围检查、宽表、标准化 |
+| `la_analysis.py` | `csv/processed/` + `csv/la_params/processed/` | `csv/la_analysis/` — 合并数据集、相关矩阵、VIF 报告、组间比较 |
 
 ---
 
