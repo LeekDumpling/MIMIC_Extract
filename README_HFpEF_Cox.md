@@ -1162,11 +1162,7 @@ python utils/model_evaluation.py
 
 ```bat
 :: A1 — LA 参数清洗
-python utils/clean_la_params.py ^
-  --morphology csv/la_params/la_morphology_results.csv ^
-  --kinematic  csv/la_params/la_kinematic_stats.csv ^
-  --qc         csv/la_params/la_analysis_qc.csv ^
-  --output_dir csv/la_params/processed
+python utils/clean_la_params.py --morphology csv/la_params/la_morphology_results.csv --kinematic csv/la_params/la_kinematic_stats.csv --qc csv/la_params/la_analysis_qc.csv --output_dir csv/la_params/processed
 
 :: A2 — LA × MIMIC 临床参数联合分析（以 hadm 时间窗为例）
 python utils/la_analysis.py ^
