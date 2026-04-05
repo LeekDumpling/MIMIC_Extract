@@ -82,6 +82,7 @@ utils/
   fit_cox_model.py            # 步骤 8
   ph_assumption_test.py       # 步骤 9
   ph_viz.py                   # 可视化模块（步骤 8、9 共用）
+  model_evaluation.py         # 步骤 10 — 模型评估（C-index、Brier Score）
   clean_la_params.py          # 步骤 A1 — LA 影像参数清洗
   la_analysis.py              # 步骤 A2 — LA × MIMIC 临床参数联合分析
 README_HFpEF_Cox.md           # ← 本文件
@@ -851,8 +852,8 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 | QC 硬过滤 | 含 `missing_spacing` 或 `analysis_error` 的视频整体移除 |
 | 行级软过滤 | 按每行 `status` 字段，将受影响的参数值置为 NaN（不填 0） |
 | **第一层：自动剔除（长表）** | 仅去除"几何/数学不可能"或"明显测量失败"的值；超出范围的值置为 NaN，行保留 |
-| **第一层补充：跨列约束（宽表）** | `LAVmin ≤ LAVmax`、`LAVmin-i ≤ LAVI`、`LAD-trans ≤ LAD-long`；违规值置为 NaN |
 | 长表 → 宽表 | 形态表按 `parameter_name` pivot；运动表按 `parameter_name__sub_item` pivot |
+| **第一层补充：跨列约束（宽表）** | `LAVmin ≤ LAVmax`、`LAVmin-i ≤ LAVI`、`LAD-trans ≤ LAD-long`；违规值置为 NaN |
 | 缺失列剔除 | 列缺失率 ≥ 30% → 整列剔除（论文约定） |
 | **第二层：人工复核标记（宽表）** | 不删除；仅为超复核范围的值添加 `{col}_review_flag = 1` 列 |
 | **未收录参数：IQR 统计** | 不进行任何过滤；计算 Tukey IQR 异常值统计，输出 CSV 报告与可视化图表 |
@@ -867,9 +868,9 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 
 | 层 | 字典名 | 大致位置 | 用途 |
 |----|--------|----------|------|
-| 第一层（自动剔除） | `LA_AUTO_REMOVE_RANGES` | `clean_la_params.py` 约第 85 行 | 几何/数学不可能值 → NaN |
-| 第二层（人工复核） | `LA_REVIEW_RANGES` | `clean_la_params.py` 约第 135 行 | 宽松范围，只标 flag |
-| 跨列约束 | `LA_CROSS_CHECKS` | `clean_la_params.py` 约第 168 行 | LAVmin≤LAVmax 等 |
+| 第一层（自动剔除） | `LA_AUTO_REMOVE_RANGES` | `clean_la_params.py` 约第 104 行 | 几何/数学不可能值 → NaN |
+| 第二层（人工复核） | `LA_REVIEW_RANGES` | `clean_la_params.py` 约第 143 行 | 宽松范围，只标 flag |
+| 跨列约束 | `LA_CROSS_CHECKS` | `clean_la_params.py` 约第 179 行 | LAVmin≤LAVmax 等 |
 
 若需修改范围，直接编辑对应字典即可。
 
@@ -884,13 +885,17 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 | `LAEF` | 0 | 100 | % |
 | `LAD-long` | 0 | — | cm |
 | `LAD-trans` | 0 | — | cm |
+| `3D LA sphericity` | 0 | — | — |
 | `LA ellipticity` | 0 | 1 | — |
 | `LA circularity` | 0 | 1 | — |
+| `LA sphericity index` | 0 | — | — |
 | `LA eccentricity index` | 0 | 1 | — |
+| `MAT area` | 0 | — | cm² |
 | `TGAR` | 0 | 1 | — |
 | `LASr` | −100 | 100 | % |
 | `LASrR` / `GCSR` / `LSR` / `ASR` | −20 | 20 | s⁻¹ |
-| `GCS` / `LS` / `AS` / `LASct` | −100 | 100 | % |
+| `LASct` / `GCS` / `LS` / `AS` | −100 | 100 | % |
+| `Time to peak LASrR` | 0 | 100 | %cycle |
 | `4CH ellipticity/circularity rate`、`Sphericity index rate` | −20 | 20 | — |
 | `Annular expansion rate`、`Longitudinal stretching rate` | −20 | 20 | cm/s |
 
@@ -905,10 +910,19 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 | `LAEF` | 5 | 90 | % |
 | `LAD-long` | 2 | 9 | cm |
 | `LAD-trans` | 1 | 8 | cm |
+| `3D LA sphericity` | 0.1 | 2.0 | — |
+| `LA ellipticity` | 0.2 | 1.0 | — |
+| `LA circularity` | 0.2 | 1.0 | — |
+| `LA sphericity index` | 0.2 | 1.5 | — |
+| `LA eccentricity index` | 0.0 | 1.0 | — |
+| `MAT area` | 0.5 | 30 | cm² |
+| `TGAR` | 0.05 | 1.0 | — |
 | `LASr` | −20 | 80 | % |
 | `LASct` / `GCS` / `LS` / `AS` | −80 | 20 | % |
 | `LASrR` / `GCSR` / `LSR` / `ASR` | −8 | 8 | s⁻¹ |
-| `4CH` 系列速率 / `Annular expansion rate` 等 | −8 | 8 | — |
+| `Time to peak LASrR` | 0 | 100 | %cycle |
+| `4CH ellipticity/circularity rate`、`Sphericity index rate` | −8 | 8 | — |
+| `Annular expansion rate`、`Longitudinal stretching rate` | −8 | 8 | cm/s |
 
 **输出文件**（默认 `csv/la_params/processed/`）：
 

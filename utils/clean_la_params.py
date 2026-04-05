@@ -222,6 +222,24 @@ def _is_binary_col(series: pd.Series) -> bool:
     return uniq.issubset({0, 1, 0.0, 1.0, True, False})
 
 
+def _safe_col_name(name: str) -> str:
+    """
+    将参数名转换为程序安全的列名（与论文宽表命名规则一致）。
+
+      空格 → _
+      /    → _
+      %    → pct
+      s^-1 → s_inv
+      -    → 保留（仅 LAVmin-i 等有意义的连字符）
+    """
+    name = str(name)
+    name = name.replace(" ", "_")
+    name = name.replace("/", "_")
+    name = name.replace("%", "pct")
+    name = name.replace("s^-1", "s_inv")
+    return name
+
+
 def _resolve_path(path: str) -> str:
     """将相对路径解析为绝对路径（支持从 utils/ 子目录启动）。"""
     if os.path.isabs(path) or os.path.exists(path):
@@ -711,24 +729,6 @@ def plot_iqr_outliers(
 # ---------------------------------------------------------------------------
 # 步骤 5：长表 → 宽表 pivot
 # ---------------------------------------------------------------------------
-
-def _safe_col_name(name: str) -> str:
-    """
-    将参数名转换为程序安全的列名（与论文宽表命名规则一致）。
-
-      空格 → _
-      /    → _
-      %    → pct
-      s^-1 → s_inv
-      -    → 保留（仅 LAVmin-i 等有意义的连字符）
-    """
-    name = str(name)
-    name = name.replace(" ", "_")
-    name = name.replace("/", "_")
-    name = name.replace("%", "pct")
-    name = name.replace("s^-1", "s_inv")
-    return name
-
 
 def pivot_morphology(df: pd.DataFrame) -> pd.DataFrame:
     """
