@@ -10,19 +10,36 @@
   - la_analysis_qc.csv          质量控制与元数据表
 
 对这三张表进行：
-  1. QC 过滤   — 依据 la_analysis_qc.csv 中的 status 字段，按可配置策略剔除
-  2. 异常值检查 — 基于生理合理范围（与 MIMIC clean_cohort_csvs.py 逻辑一致）
-  3. 缺失值处理 — 参考 impute_normalize.py 策略；影像参数算法失败时直接剔除行而非填补
+  1. QC 过滤       — 依据 la_analysis_qc.csv 中的 status 字段，按可配置策略剔除
+  2. 异常值检查（两层）：
+       第一层（自动剔除）— 仅去除"几何/数学不可能"或"明显测量失败"的值，
+         目标是不误删真实患者；超出范围的值置为 NaN，保留行。
+         • 单列阈值：LA_AUTO_REMOVE_RANGES（在长表上逐行检查）
+         • 跨列约束：LAVmin ≤ LAVmax 等，在宽表上执行（apply_cross_checks_wide）
+       第二层（人工复核标记）— 不删除，仅在宽表中添加 {col}_review_flag 列；
+         宽松范围主要抓分割错误、单位错误、追踪失败、相位错配。
+         使用 LA_REVIEW_RANGES 定义范围（apply_review_flags_wide）。
+       未收录参数 — 不进行自动过滤；改为计算 IQR 四分位异常值统计，
+         输出 CSV 报告及可视化图表供人工参考（compute_iqr_outlier_stats）。
+  3. 缺失值处理   — 参考 impute_normalize.py 策略；影像参数算法失败时保留 NaN，不填补
   4. Z-score 标准化 — 连续变量（偏态列先 log1p 变换）
   5. 长表 → 宽表 pivot
   6. 保存输出文件
 
-输出（默认 csv/la_params/）
-  la_morphology_wide.csv     形态学参数宽表（主键：video_prefix + subject_id）
-  la_kinematic_wide.csv      运动学参数宽表（主键：video_prefix + subject_id）
-  la_params_qc_filtered.csv  经过 QC 过滤的 QC 表（供下游追溯）
-  la_params_missingness.csv  各参数缺失率报告
-  la_params_feature_decisions.csv  特征决策（保留/剔除/填补）
+输出（默认 csv/la_params/processed/）
+  la_morphology_wide.csv              形态学参数宽表（主键：video_prefix + subject_id）
+  la_kinematic_wide.csv               运动学参数宽表（主键：video_prefix + subject_id）
+  la_params_qc_filtered.csv           经过 QC 过滤的 QC 表（供下游追溯）
+  la_params_missingness_morph.csv     形态表缺失率报告
+  la_params_missingness_kine.csv      运动表缺失率报告
+  la_params_feature_decisions.csv     特征决策（保留/剔除/填补）
+  la_params_cross_check_log.csv       跨列约束违规记录（第一层）
+  la_params_review_log_morph.csv      形态表第二层复核标记汇总
+  la_params_review_log_kine.csv       运动表第二层复核标记汇总
+  la_params_iqr_outliers_morph.csv    形态表未收录参数 IQR 异常值统计
+  la_params_iqr_outliers_kine.csv     运动表未收录参数 IQR 异常值统计
+  la_params_iqr_outliers_morph.png    形态表 IQR 异常值可视化（需要 matplotlib）
+  la_params_iqr_outliers_kine.png     运动表 IQR 异常值可视化（需要 matplotlib）
 
 语义约定（务必遵守）
   - max_idx → LAVmax；min_idx → LAVmin
@@ -35,10 +52,13 @@
       --morphology  path/to/la_morphology_results.csv \\
       --kinematic   path/to/la_kinematic_stats.csv \\
       --qc          path/to/la_analysis_qc.csv \\
-      --output_dir  csv/la_params
+      --output_dir  csv/la_params/processed
 
   # 仅生成缺失率报告，不写输出文件：
   python utils/clean_la_params.py --report_only
+
+  # 跳过 IQR 图表生成（无 matplotlib 环境）：
+  python utils/clean_la_params.py --no_plots
 """
 
 import argparse
@@ -77,45 +97,90 @@ except ImportError:
     )
 
 # ---------------------------------------------------------------------------
-# 生理范围约束：每个 LA 形态/运动学参数的合理上下界
-# 参考：ASE/EACVI 指南及超声心动图参考值
-# 影像算法极端值（由分割失败或轮廓跟踪异常导致）使用可视化检查补充
+# 第一层：自动剔除阈值
+# 仅去除"几何/数学不可能"或"明显测量失败"的值，目标是不误删真实患者。
+# 超出范围的值置为 NaN（保留行，保留该视频其他参数）。
 # ---------------------------------------------------------------------------
-LA_PHYSIO_RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
+LA_AUTO_REMOVE_RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     # 形态学参数
-    "LAVmax":             (10.0,  200.0),   # mL
-    "LAVI":               (5.0,   120.0),   # mL/m²
-    "LAVmin":             (5.0,   150.0),   # mL
-    "LAVmin-i":           (2.0,   90.0),    # mL/m²
-    "LAEF":               (10.0,  95.0),    # %
-    "LAD-long":           (1.5,   8.0),     # cm
-    "LAD-trans":          (1.0,   7.0),     # cm
-    "3D LA sphericity":   (None,  None),    # 当前未实现，跳过
-    "LA ellipticity":     (0.0,   5.0),     # 无量纲
-    "LA circularity":     (0.0,   2.0),     # 无量纲
-    "LA sphericity index":(0.0,   2.0),     # 无量纲
-    "LA eccentricity index": (0.0, 1.0),    # 无量纲
-    "MAT area":           (1.0,   20.0),    # cm²
-    "TGAR":               (0.0,   5.0),     # 无量纲
-    # 运动学参数（参数名来自 la_kinematic_stats.csv 的 parameter_name 列）
-    "LASr":               (-5.0,  60.0),    # %
-    "LASrR":              (-10.0, 10.0),    # s^-1
-    "Time to peak LASrR": (0.0,   100.0),   # %cycle
-    "LASct":              (-60.0, 5.0),     # %
-    "GCS":                (-60.0, 5.0),     # %
-    "GCSR":               (-10.0, 10.0),    # s^-1
-    "LS":                 (-60.0, 5.0),     # %
-    "LSR":                (-10.0, 10.0),    # s^-1
-    "AS":                 (-60.0, 5.0),     # %
-    "ASR":                (-10.0, 10.0),    # s^-1
-    "4CH ellipticity rate":    (-5.0, 5.0), # 无量纲
-    "4CH circularity rate":    (-5.0, 5.0), # 无量纲
-    "Sphericity index rate":   (-5.0, 5.0), # 无量纲
-    "MAT area":            (0.0,  20.0),    # cm²（运动学）
-    "TGAR":                (0.0,   5.0),    # 无量纲（运动学）
-    "Annular expansion rate":  (-10.0, 10.0),  # cm/s
-    "Longitudinal stretching rate": (-10.0, 10.0),  # cm/s
+    "LAVmax":                       (0.0,    None),   # > 0 mL
+    "LAVI":                         (0.0,    None),   # > 0 mL/m²
+    "LAVmin":                       (0.0,    None),   # > 0 mL（跨列约束见 apply_cross_checks_wide）
+    "LAVmin-i":                     (0.0,    None),   # > 0 mL/m²
+    "LAEF":                         (0.0,   100.0),   # 0–100 %
+    "LAD-long":                     (0.0,    None),   # > 0 cm
+    "LAD-trans":                    (0.0,    None),   # > 0 cm
+    "3D LA sphericity":             (0.0,    None),   # > 0
+    "LA ellipticity":               (0.0,     1.0),   # 0–1（短轴/长轴定义）
+    "LA circularity":               (0.0,     1.0),   # 0–1
+    "LA sphericity index":          (0.0,    None),   # > 0
+    "LA eccentricity index":        (0.0,     1.0),   # 0–1
+    "MAT area":                     (0.0,    None),   # > 0 cm²
+    "TGAR":                         (0.0,     1.0),   # 0–1（三角形/整体面积）
+    # 运动学参数
+    "LASr":                         (-100.0, 100.0),  # %
+    "LASrR":                        (-20.0,   20.0),  # s^-1
+    "Time to peak LASrR":           (0.0,    100.0),  # %cycle
+    "LASct":                        (-100.0, 100.0),  # %
+    "GCS":                          (-100.0, 100.0),  # %
+    "GCSR":                         (-20.0,   20.0),  # s^-1
+    "LS":                           (-100.0, 100.0),  # %
+    "LSR":                          (-20.0,   20.0),  # s^-1
+    "AS":                           (-100.0, 100.0),  # %
+    "ASR":                          (-20.0,   20.0),  # s^-1
+    "4CH ellipticity rate":         (-20.0,   20.0),  # 无量纲
+    "4CH circularity rate":         (-20.0,   20.0),  # 无量纲
+    "Sphericity index rate":        (-20.0,   20.0),  # 无量纲
+    "Annular expansion rate":       (-20.0,   20.0),  # cm/s
+    "Longitudinal stretching rate": (-20.0,   20.0),  # cm/s
 }
+
+# ---------------------------------------------------------------------------
+# 第二层：人工复核阈值
+# 不自动删除，仅在宽表中添加 {col}_review_flag 标志列（0=正常，1=需复核）。
+# 宽松范围主要抓分割错误、单位错误、追踪失败、相位错配等。
+# ---------------------------------------------------------------------------
+LA_REVIEW_RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
+    # 形态学参数
+    "LAVmax":                       (5.0,   250.0),  # mL
+    "LAVI":                         (3.0,   150.0),  # mL/m²
+    "LAVmin":                       (3.0,   200.0),  # mL
+    "LAVmin-i":                     (1.0,   120.0),  # mL/m²
+    "LAEF":                         (5.0,    90.0),  # %
+    "LAD-long":                     (2.0,     9.0),  # cm
+    "LAD-trans":                    (1.0,     8.0),  # cm
+    "3D LA sphericity":             (0.1,     2.0),  # 无量纲
+    "LA ellipticity":               (0.2,     1.0),  # 无量纲
+    "LA circularity":               (0.2,     1.0),  # 无量纲
+    "LA sphericity index":          (0.2,     1.5),  # 无量纲
+    "LA eccentricity index":        (0.0,     1.0),  # 无量纲
+    "MAT area":                     (0.5,    30.0),  # cm²
+    "TGAR":                         (0.05,    1.0),  # 无量纲
+    # 运动学参数
+    "LASr":                         (-20.0,  80.0),  # %
+    "LASrR":                        (-8.0,    8.0),  # s^-1
+    "Time to peak LASrR":           (0.0,   100.0),  # %cycle
+    "LASct":                        (-80.0,  20.0),  # %
+    "GCS":                          (-80.0,  20.0),  # %
+    "GCSR":                         (-8.0,    8.0),  # s^-1
+    "LS":                           (-80.0,  20.0),  # %
+    "LSR":                          (-8.0,    8.0),  # s^-1
+    "AS":                           (-80.0,  20.0),  # %
+    "ASR":                          (-8.0,    8.0),  # s^-1
+    "4CH ellipticity rate":         (-8.0,    8.0),  # 无量纲
+    "4CH circularity rate":         (-8.0,    8.0),  # 无量纲
+    "Sphericity index rate":        (-8.0,    8.0),  # 无量纲
+    "Annular expansion rate":       (-8.0,    8.0),  # cm/s
+    "Longitudinal stretching rate": (-8.0,    8.0),  # cm/s
+}
+
+# 跨列一致性约束（第一层补充，在宽表上执行）
+# 格式：(大值参数名, 小值参数名)，若 小值列 > 大值列 则将 小值列 置为 NaN
+LA_CROSS_CHECKS: List[Tuple[str, str]] = [
+    ("LAVmax",   "LAVmin"),     # LAVmin ≤ LAVmax
+    ("LAVI",     "LAVmin-i"),   # LAVmin-i ≤ LAVI
+    ("LAD-long", "LAD-trans"),  # LAD-trans ≤ LAD-long（垂直短轴定义下）
+]
 
 # QC status 字段中"硬过滤"状态码（含其中任意一个 → 该视频完全剔除）
 QC_HARD_FILTER_CODES = {"missing_spacing", "analysis_error"}
@@ -307,14 +372,13 @@ def apply_row_status_filter(df: pd.DataFrame) -> pd.DataFrame:
 
 def apply_physio_range_check(
     df: pd.DataFrame,
-    ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = LA_PHYSIO_RANGES,
+    ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = LA_AUTO_REMOVE_RANGES,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    对 value 列按 parameter_name 施加生理范围约束。
+    第一层自动剔除：对 value 列按 parameter_name 施加单列绝对阈值约束。
 
     超出范围的值被置为 NaN（不直接剔除行，以保留该视频其他参数）。
-    参考论文：影像学参数通过可视化分布图检查，识别由分割失败或
-    轮廓跟踪异常造成的极端值。
+    未收录在 ranges 中的参数名直接跳过（不过滤），留给 IQR 统计处理。
 
     返回
     ----
@@ -350,10 +414,298 @@ def apply_physio_range_check(
 
     outlier_log = pd.DataFrame(log_rows)
     if len(outlier_log):
-        print(f"  [生理范围] 置 NaN 共 {len(outlier_log)} 个超范围值")
+        print(f"  [第一层自动剔除] 置 NaN 共 {len(outlier_log)} 个超范围值")
     else:
-        print("  [生理范围] 未发现超范围值")
+        print("  [第一层自动剔除] 未发现超范围值")
     return df, outlier_log
+
+
+# ---------------------------------------------------------------------------
+# 步骤 4b：跨列一致性约束（第一层补充，在宽表上执行）
+# ---------------------------------------------------------------------------
+
+def apply_cross_checks_wide(
+    df: pd.DataFrame,
+    cross_checks: List[Tuple[str, str]] = LA_CROSS_CHECKS,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    在宽表上执行跨列一致性约束（第一层自动修正补充）。
+
+    对每对 (bigger_param, smaller_param)，若 smaller_col > bigger_col，
+    则将 smaller_col 置为 NaN（保留 bigger_col 及其他列）。
+
+    返回
+    ----
+    df_checked, cross_check_log
+    """
+    df = df.copy()
+    log_rows = []
+
+    for big_param, small_param in cross_checks:
+        big_col   = _safe_col_name(big_param)
+        small_col = _safe_col_name(small_param)
+
+        if big_col not in df.columns or small_col not in df.columns:
+            continue
+
+        both_valid = df[big_col].notna() & df[small_col].notna()
+        violation  = both_valid & (df[small_col] > df[big_col])
+        n_viol = int(violation.sum())
+
+        if n_viol > 0:
+            prefix_col = "video_prefix" if "video_prefix" in df.columns else None
+            for idx in df.index[violation]:
+                log_rows.append({
+                    "video_prefix": df.at[idx, prefix_col] if prefix_col else idx,
+                    "constraint":   f"{small_param} ≤ {big_param}",
+                    "small_value":  float(df.at[idx, small_col]),
+                    "big_value":    float(df.at[idx, big_col]),
+                    "action":       "set_nan_small_col",
+                })
+            df.loc[violation, small_col] = np.nan
+            print(f"  [跨列约束] {small_param} ≤ {big_param}："
+                  f"修正 {n_viol} 个违规值 → NaN")
+
+    cross_log = pd.DataFrame(log_rows)
+    if cross_log.empty:
+        print("  [跨列约束] 未发现跨列违规值")
+    return df, cross_log
+
+
+# ---------------------------------------------------------------------------
+# 步骤 4c：第二层人工复核标记（在宽表上执行）
+# ---------------------------------------------------------------------------
+
+def apply_review_flags_wide(
+    df: pd.DataFrame,
+    skip_cols: List[str],
+    review_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = LA_REVIEW_RANGES,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    第二层：在宽表中为超出复核范围的值添加 {col}_review_flag 列（只标记，不删除）。
+
+    flag = 0  → 值在复核范围内
+    flag = 1  → 值超出复核范围，建议人工检查
+    flag = NaN → 对应原值为 NaN，无法判断
+
+    运动学列格式为 safe_param__sub_item，按双下划线前部分匹配复核范围。
+
+    返回
+    ----
+    df_flagged, review_log
+    """
+    df = df.copy()
+    log_rows = []
+    skip_set = set(skip_cols)
+
+    # safe_param_name → (lo, hi)
+    safe_review: Dict[str, Tuple[Optional[float], Optional[float]]] = {
+        _safe_col_name(k): v for k, v in review_ranges.items()
+    }
+
+    for col in list(df.columns):
+        if col in skip_set:
+            continue
+        if col.endswith("_review_flag") or col.endswith("_missing_flag"):
+            continue
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+
+        base = col.split("__")[0] if "__" in col else col
+        if base not in safe_review:
+            continue
+
+        lo, hi = safe_review[base]
+        flag_col = f"{col}_review_flag"
+
+        valid_mask = df[col].notna()
+        vals = df.loc[valid_mask, col]
+        is_outside = pd.Series(False, index=vals.index)
+        if lo is not None:
+            is_outside = is_outside | (vals < lo)
+        if hi is not None:
+            is_outside = is_outside | (vals > hi)
+
+        # Build Int8 array: 0/1 for valid rows, NA for NaN rows
+        flag_arr = pd.array(is_outside.reindex(df.index).fillna(False).astype(int),
+                            dtype="Int8")
+        flag_arr[~valid_mask.values] = pd.NA
+        df[flag_col] = flag_arr
+
+        n_flagged = int(is_outside.sum())
+        if n_flagged > 0:
+            log_rows.append({
+                "column":      col,
+                "review_lo":   lo,
+                "review_hi":   hi,
+                "n_flagged":   n_flagged,
+                "pct_flagged": round(n_flagged / max(int(valid_mask.sum()), 1) * 100, 2),
+            })
+
+    if log_rows:
+        n_cols = len(log_rows)
+        total  = sum(r["n_flagged"] for r in log_rows)
+        print(f"  [第二层复核] {n_cols} 个参数列共 {total} 处超复核范围（已添加 _review_flag 列）")
+    else:
+        print("  [第二层复核] 所有参数均在复核范围内，未添加 _review_flag 列")
+
+    return df, pd.DataFrame(log_rows)
+
+
+# ---------------------------------------------------------------------------
+# 步骤 4d：IQR 异常值统计（未收录参数）
+# ---------------------------------------------------------------------------
+
+def compute_iqr_outlier_stats(
+    df: pd.DataFrame,
+    skip_cols: List[str],
+    defined_params: Optional[set] = None,
+) -> pd.DataFrame:
+    """
+    对宽表中"未收录在预定义范围内"的参数列计算 IQR 四分位异常值统计。
+
+    异常值定义（Tukey 栅栏）：
+      < Q1 − 1.5 × IQR  或  > Q3 + 1.5 × IQR
+
+    参数
+    ----
+    df             : 宽表（标准化之前）
+    skip_cols      : 不参与统计的列（id 列等）
+    defined_params : 已定义自动剔除 / 复核范围的参数 safe_name 集合；
+                     在此集合中的列跳过 IQR 统计。
+                     若为 None 则对所有合格数值列计算。
+
+    返回
+    ----
+    DataFrame（按 pct_outlier 降序），每行对应一个参数列。
+    """
+    if defined_params is None:
+        defined_params = set()
+
+    rows = []
+    skip_set = set(skip_cols)
+
+    for col in df.columns:
+        if col in skip_set:
+            continue
+        if col.endswith("_review_flag") or col.endswith("_missing_flag"):
+            continue
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        if _is_binary_col(df[col]):
+            continue
+
+        base = col.split("__")[0] if "__" in col else col
+        if base in defined_params:
+            continue  # 已有预定义范围，跳过
+
+        vals = df[col].dropna()
+        if len(vals) < 4:
+            continue
+
+        q1  = float(vals.quantile(0.25))
+        q3  = float(vals.quantile(0.75))
+        iqr = q3 - q1
+        lo_bound = q1 - 1.5 * iqr
+        hi_bound = q3 + 1.5 * iqr
+        n_lo = int((vals < lo_bound).sum())
+        n_hi = int((vals > hi_bound).sum())
+
+        rows.append({
+            "column":          col,
+            "n":               len(vals),
+            "mean":            round(float(vals.mean()),    4),
+            "std":             round(float(vals.std()),     4),
+            "min":             round(float(vals.min()),     4),
+            "Q1":              round(q1,                    4),
+            "median":          round(float(vals.median()),  4),
+            "Q3":              round(q3,                    4),
+            "max":             round(float(vals.max()),     4),
+            "IQR":             round(iqr,                   4),
+            "iqr_lo_bound":    round(lo_bound,              4),
+            "iqr_hi_bound":    round(hi_bound,              4),
+            "n_outlier_lo":    n_lo,
+            "n_outlier_hi":    n_hi,
+            "n_outlier_total": n_lo + n_hi,
+            "pct_outlier":     round((n_lo + n_hi) / len(vals) * 100, 2),
+        })
+
+    result = (
+        pd.DataFrame(rows)
+        .sort_values("pct_outlier", ascending=False)
+        .reset_index(drop=True)
+    )
+    if len(result):
+        print(f"  [IQR 统计] {len(result)} 个未收录参数列，"
+              f"最高异常值比例 {result['pct_outlier'].iloc[0]:.1f}%")
+    else:
+        print("  [IQR 统计] 无未收录参数列（或所有列均有预定义范围）")
+    return result
+
+
+def plot_iqr_outliers(
+    iqr_stats: pd.DataFrame,
+    output_path: str,
+    title: str = "IQR 异常值统计（未收录参数）",
+) -> Optional[str]:
+    """
+    生成 IQR 异常值汇总水平条形图并保存为 PNG。
+
+    需要 matplotlib；若未安装则发出警告并返回 None。
+
+    参数
+    ----
+    iqr_stats   : compute_iqr_outlier_stats 返回的 DataFrame
+    output_path : PNG 输出路径（目录不存在时自动创建）
+    title       : 图表标题
+
+    返回
+    ----
+    output_path（成功）或 None（matplotlib 不可用 / 无数据）
+    """
+    if iqr_stats is None or len(iqr_stats) == 0:
+        return None
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        warnings.warn(
+            "matplotlib 未安装，跳过 IQR 图表生成。\n安装命令：pip install matplotlib",
+            UserWarning,
+        )
+        return None
+
+    df = iqr_stats.copy()
+    n_params = len(df)
+    fig_height = max(4.0, n_params * 0.45)
+
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+    colors = ["#d62728" if p > 10 else "#1f77b4" for p in df["pct_outlier"]]
+    ax.barh(df["column"], df["pct_outlier"], color=colors)
+    ax.axvline(x=5, color="orange", linestyle="--", linewidth=0.8, label="5% 参考线")
+    ax.set_xlabel("IQR 异常值比例 (%)", fontsize=10)
+    ax.set_title(title, fontsize=11)
+    ax.legend(fontsize=8)
+
+    for i, (_, row) in enumerate(df.iterrows()):
+        ax.text(
+            row["pct_outlier"] + 0.2,
+            i,
+            f'{int(row["n_outlier_total"])} / {int(row["n"])}',
+            va="center",
+            fontsize=7,
+        )
+
+    plt.tight_layout()
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [IQR 图表] 已保存：{output_path}")
+    return output_path
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +908,7 @@ def normalise_wide(
     df = df.copy()
     log_rows = []
     no_norm = set(skip_cols) | _NO_NORM_COLS
-    no_norm |= {c for c in df.columns if c.endswith("_missing_flag")}
+    no_norm |= {c for c in df.columns if c.endswith(("_missing_flag", "_review_flag"))}
 
     for col in df.columns:
         if col in no_norm:
@@ -608,9 +960,10 @@ def process_la_params(
     hard_filter_codes: Optional[set] = None,
     thresh_drop: float = THRESH_DROP,
     no_normalise: bool = False,
+    no_plots: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """
-    完整 LA 参数清洗流程。
+    完整 LA 参数清洗流程（两层异常值过滤 + IQR 统计）。
 
     参数
     ----
@@ -618,17 +971,21 @@ def process_la_params(
     kinematic_path    : la_kinematic_stats.csv 路径
     qc_path           : la_analysis_qc.csv 路径
     output_dir        : 输出目录
-    report_only       : 仅生成缺失率报告，不写输出文件
+    report_only       : 仅生成报告，不写输出文件
     hard_filter_codes : 硬过滤状态码集合（默认使用 QC_HARD_FILTER_CODES）
     thresh_drop       : 列缺失率超过此值则剔除该列（默认 0.30）
     no_normalise      : True → 跳过 Z-score 标准化
+    no_plots          : True → 跳过 IQR 图表生成（无 matplotlib 环境时使用）
 
     返回
     ----
     dict with keys:
       "morphology_wide", "kinematic_wide", "qc_filtered",
       "missingness_morph", "missingness_kine",
-      "outlier_log_morph", "outlier_log_kine"
+      "outlier_log_morph", "outlier_log_kine",
+      "cross_check_log",
+      "review_log_morph", "review_log_kine",
+      "iqr_stats_morph",  "iqr_stats_kine"
     """
     if hard_filter_codes is None:
         hard_filter_codes = QC_HARD_FILTER_CODES
@@ -651,7 +1008,7 @@ def process_la_params(
     df_morph = apply_row_status_filter(df_morph)
     df_kine  = apply_row_status_filter(df_kine)
 
-    # 4. 生理范围检查
+    # 4. 第一层自动剔除：单列绝对阈值（长表）
     df_morph, outlier_morph = apply_physio_range_check(df_morph)
     df_kine,  outlier_kine  = apply_physio_range_check(df_kine)
 
@@ -659,6 +1016,10 @@ def process_la_params(
     morph_wide = pivot_morphology(df_morph)
     kine_wide  = pivot_kinematic(df_kine)
     print(f"  [pivot] 形态宽表 {morph_wide.shape}，运动宽表 {kine_wide.shape}")
+
+    # 5b. 第一层补充：跨列一致性约束（宽表，仅形态表）
+    print("\n  --- 跨列一致性约束 ---")
+    morph_wide, cross_check_log = apply_cross_checks_wide(morph_wide)
 
     # ID 列（不参与缺失分析和标准化）
     id_cols = ["video_prefix", "subject_id", "study_id", "source_group"]
@@ -681,13 +1042,18 @@ def process_la_params(
 
     if report_only:
         return {
-            "morphology_wide":  morph_wide,
-            "kinematic_wide":   kine_wide,
-            "qc_filtered":      df_qc,
+            "morphology_wide":   morph_wide,
+            "kinematic_wide":    kine_wide,
+            "qc_filtered":       df_qc,
             "missingness_morph": miss_morph,
-            "missingness_kine": miss_kine,
+            "missingness_kine":  miss_kine,
             "outlier_log_morph": outlier_morph,
-            "outlier_log_kine": outlier_kine,
+            "outlier_log_kine":  outlier_kine,
+            "cross_check_log":   cross_check_log,
+            "review_log_morph":  pd.DataFrame(),
+            "review_log_kine":   pd.DataFrame(),
+            "iqr_stats_morph":   pd.DataFrame(),
+            "iqr_stats_kine":    pd.DataFrame(),
         }
 
     # 7. 缺失值处理（影像参数不填补，仅剔除超阈值列）
@@ -698,6 +1064,26 @@ def process_la_params(
 
     print(f"\n  形态表：剔除列 {dropped_m or 'none'}，新增 flag 列 {flags_m or 'none'}")
     print(f"  运动表：剔除列 {dropped_k or 'none'}，新增 flag 列 {flags_k or 'none'}")
+
+    # 7b. 第二层：人工复核标记（宽表，在标准化之前）
+    print("\n  --- 第二层人工复核标记（形态表）---")
+    morph_wide, review_log_morph = apply_review_flags_wide(morph_wide, skip_cols=id_cols)
+    print("\n  --- 第二层人工复核标记（运动表）---")
+    kine_wide,  review_log_kine  = apply_review_flags_wide(kine_wide,  skip_cols=id_cols)
+
+    # 7c. IQR 异常值统计（未收录参数，在标准化之前）
+    safe_defined = {
+        _safe_col_name(k)
+        for k in set(LA_AUTO_REMOVE_RANGES) | set(LA_REVIEW_RANGES)
+    }
+    print("\n  --- IQR 异常值统计（未收录参数，形态表）---")
+    iqr_stats_morph = compute_iqr_outlier_stats(
+        morph_wide, skip_cols=id_cols, defined_params=safe_defined
+    )
+    print("\n  --- IQR 异常值统计（未收录参数，运动表）---")
+    iqr_stats_kine = compute_iqr_outlier_stats(
+        kine_wide, skip_cols=id_cols, defined_params=safe_defined
+    )
 
     # 8. 标准化
     if not no_normalise:
@@ -716,18 +1102,30 @@ def process_la_params(
     # 9. 保存
     os.makedirs(output_dir, exist_ok=True)
 
-    morph_path = os.path.join(output_dir, "la_morphology_wide.csv")
-    kine_path  = os.path.join(output_dir, "la_kinematic_wide.csv")
-    qc_out_path = os.path.join(output_dir, "la_params_qc_filtered.csv")
-    miss_m_path = os.path.join(output_dir, "la_params_missingness_morph.csv")
-    miss_k_path = os.path.join(output_dir, "la_params_missingness_kine.csv")
-    feat_path   = os.path.join(output_dir, "la_params_feature_decisions.csv")
+    morph_path        = os.path.join(output_dir, "la_morphology_wide.csv")
+    kine_path         = os.path.join(output_dir, "la_kinematic_wide.csv")
+    qc_out_path       = os.path.join(output_dir, "la_params_qc_filtered.csv")
+    miss_m_path       = os.path.join(output_dir, "la_params_missingness_morph.csv")
+    miss_k_path       = os.path.join(output_dir, "la_params_missingness_kine.csv")
+    feat_path         = os.path.join(output_dir, "la_params_feature_decisions.csv")
+    cross_log_path    = os.path.join(output_dir, "la_params_cross_check_log.csv")
+    review_m_path     = os.path.join(output_dir, "la_params_review_log_morph.csv")
+    review_k_path     = os.path.join(output_dir, "la_params_review_log_kine.csv")
+    iqr_m_csv_path    = os.path.join(output_dir, "la_params_iqr_outliers_morph.csv")
+    iqr_k_csv_path    = os.path.join(output_dir, "la_params_iqr_outliers_kine.csv")
+    iqr_m_png_path    = os.path.join(output_dir, "la_params_iqr_outliers_morph.png")
+    iqr_k_png_path    = os.path.join(output_dir, "la_params_iqr_outliers_kine.png")
 
-    morph_wide.to_csv(morph_path, index=False)
-    kine_wide.to_csv(kine_path,   index=False)
-    df_qc.to_csv(qc_out_path,     index=False)
+    morph_wide.to_csv(morph_path,  index=False)
+    kine_wide.to_csv(kine_path,    index=False)
+    df_qc.to_csv(qc_out_path,      index=False)
     miss_morph.to_csv(miss_m_path, index=False)
     miss_kine.to_csv(miss_k_path,  index=False)
+    cross_check_log.to_csv(cross_log_path, index=False)
+    review_log_morph.to_csv(review_m_path, index=False)
+    review_log_kine.to_csv(review_k_path,  index=False)
+    iqr_stats_morph.to_csv(iqr_m_csv_path, index=False)
+    iqr_stats_kine.to_csv(iqr_k_csv_path,  index=False)
 
     # 汇总特征决策
     feat_all = pd.concat([
@@ -736,9 +1134,25 @@ def process_la_params(
     ], ignore_index=True)
     feat_all.to_csv(feat_path, index=False)
 
+    # IQR 图表（需要 matplotlib）
+    if not no_plots:
+        plot_iqr_outliers(
+            iqr_stats_morph, iqr_m_png_path,
+            title="IQR 异常值统计 — 形态表未收录参数",
+        )
+        plot_iqr_outliers(
+            iqr_stats_kine, iqr_k_png_path,
+            title="IQR 异常值统计 — 运动表未收录参数",
+        )
+
+    saved_files = [
+        morph_path, kine_path, qc_out_path,
+        miss_m_path, miss_k_path, feat_path,
+        cross_log_path, review_m_path, review_k_path,
+        iqr_m_csv_path, iqr_k_csv_path,
+    ]
     print(f"\n  输出文件：")
-    for p in [morph_path, kine_path, qc_out_path, miss_m_path,
-              miss_k_path, feat_path]:
+    for p in saved_files:
         print(f"    {p}")
 
     return {
@@ -749,6 +1163,11 @@ def process_la_params(
         "missingness_kine":  miss_kine,
         "outlier_log_morph": outlier_morph,
         "outlier_log_kine":  outlier_kine,
+        "cross_check_log":   cross_check_log,
+        "review_log_morph":  review_log_morph,
+        "review_log_kine":   review_log_kine,
+        "iqr_stats_morph":   iqr_stats_morph,
+        "iqr_stats_kine":    iqr_stats_kine,
     }
 
 
@@ -797,6 +1216,11 @@ def main() -> None:
         action="store_true",
         help="跳过 Z-score 标准化步骤",
     )
+    ap.add_argument(
+        "--no_plots",
+        action="store_true",
+        help="跳过 IQR 图表生成（无 matplotlib 环境时使用）",
+    )
     args = ap.parse_args()
 
     args.morphology  = _resolve_path(args.morphology)
@@ -812,6 +1236,7 @@ def main() -> None:
         report_only=args.report_only,
         thresh_drop=args.drop_threshold,
         no_normalise=args.no_normalise,
+        no_plots=args.no_plots,
     )
 
     print("\n完成。")

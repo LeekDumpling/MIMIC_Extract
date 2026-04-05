@@ -844,53 +844,71 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 - 所有 `value` 空字符串均表示"当前不可用"，绝不能按 0 处理
 - 所有参数基于模型连续 28 点轮廓，非人工真值直接测量
 
-**清洗步骤**：
+**清洗步骤（两层异常值过滤）**：
 
 | 步骤 | 方法 |
 |------|------|
 | QC 硬过滤 | 含 `missing_spacing` 或 `analysis_error` 的视频整体移除 |
 | 行级软过滤 | 按每行 `status` 字段，将受影响的参数值置为 NaN（不填 0） |
-| 生理范围检查 | 超出范围的值置为 NaN，行保留（其他参数不受影响） |
+| **第一层：自动剔除（长表）** | 仅去除"几何/数学不可能"或"明显测量失败"的值；超出范围的值置为 NaN，行保留 |
+| **第一层补充：跨列约束（宽表）** | `LAVmin ≤ LAVmax`、`LAVmin-i ≤ LAVI`、`LAD-trans ≤ LAD-long`；违规值置为 NaN |
 | 长表 → 宽表 | 形态表按 `parameter_name` pivot；运动表按 `parameter_name__sub_item` pivot |
 | 缺失列剔除 | 列缺失率 ≥ 30% → 整列剔除（论文约定） |
+| **第二层：人工复核标记（宽表）** | 不删除；仅为超复核范围的值添加 `{col}_review_flag = 1` 列 |
+| **未收录参数：IQR 统计** | 不进行任何过滤；计算 Tukey IQR 异常值统计，输出 CSV 报告与可视化图表 |
 | 影像缺失策略 | 算法失败导致的缺失直接保留 NaN（不填补），下游分析时按需 `dropna` |
-| Z-score 标准化 | `\|偏度\| > 1.0` 先 `log1p`，再 `StandardScaler` |
+| Z-score 标准化 | `\|偏度\| > 1.0` 先 `log1p`，再 `StandardScaler`（跳过 `_review_flag` 列） |
 
 #### 生理范围检查所用文件及位置
 
 > **与 `clean_cohort_csvs.py` 不同**：MIMIC 临床参数的范围来自外部文件  
 > `resources/variable_ranges.csv`（MIMIC-Extract 项目随附），  
-> LA 影像参数的范围**直接硬编码**在  
-> **`utils/clean_la_params.py`，第 84–118 行，字典 `LA_PHYSIO_RANGES`**。  
->
-> 原因：LA 参数来自 EchoGraphs 模型输出，`variable_ranges.csv` 中无对应条目；  
-> 范围参考 ASE/EACVI 超声心动图指南及发表文献，以识别分割失败或轮廓跟踪异常造成的极端值。
+> LA 影像参数的范围**直接硬编码**在 `utils/clean_la_params.py` 中，分为两层：
 
-当前 `LA_PHYSIO_RANGES` 定义的范围如下：
+| 层 | 字典名 | 大致位置 | 用途 |
+|----|--------|----------|------|
+| 第一层（自动剔除） | `LA_AUTO_REMOVE_RANGES` | `clean_la_params.py` 约第 85 行 | 几何/数学不可能值 → NaN |
+| 第二层（人工复核） | `LA_REVIEW_RANGES` | `clean_la_params.py` 约第 135 行 | 宽松范围，只标 flag |
+| 跨列约束 | `LA_CROSS_CHECKS` | `clean_la_params.py` 约第 168 行 | LAVmin≤LAVmax 等 |
+
+若需修改范围，直接编辑对应字典即可。
+
+**第一层自动剔除阈值**：
 
 | 参数 | 下界 | 上界 | 单位 |
 |------|------|------|------|
-| `LAVmax` | 10 | 200 | mL |
-| `LAVI` | 5 | 120 | mL/m² |
-| `LAVmin` | 5 | 150 | mL |
-| `LAVmin-i` | 2 | 90 | mL/m² |
-| `LAEF` | 10 | 95 | % |
-| `LAD-long` | 1.5 | 8.0 | cm |
-| `LAD-trans` | 1.0 | 7.0 | cm |
-| `LA ellipticity` | 0 | 5 | — |
-| `LA circularity` | 0 | 2 | — |
-| `LA sphericity index` | 0 | 2 | — |
+| `LAVmax` | 0 | — | mL |
+| `LAVI` | 0 | — | mL/m² |
+| `LAVmin` | 0 | — | mL |
+| `LAVmin-i` | 0 | — | mL/m² |
+| `LAEF` | 0 | 100 | % |
+| `LAD-long` | 0 | — | cm |
+| `LAD-trans` | 0 | — | cm |
+| `LA ellipticity` | 0 | 1 | — |
+| `LA circularity` | 0 | 1 | — |
 | `LA eccentricity index` | 0 | 1 | — |
-| `MAT area` | 1 | 20 | cm² |
-| `TGAR` | 0 | 5 | — |
-| `LASr` | −5 | 60 | % |
-| `LASrR` | −10 | 10 | s⁻¹ |
-| `GCS` / `LS` / `AS` / `LASct` | −60 | 5 | % |
-| 各速率类（`GCSR`/`LSR`/`ASR` 等） | −10 | 10 | s⁻¹ |
-| `Annular expansion rate` | −10 | 10 | cm/s |
-| `Longitudinal stretching rate` | −10 | 10 | cm/s |
+| `TGAR` | 0 | 1 | — |
+| `LASr` | −100 | 100 | % |
+| `LASrR` / `GCSR` / `LSR` / `ASR` | −20 | 20 | s⁻¹ |
+| `GCS` / `LS` / `AS` / `LASct` | −100 | 100 | % |
+| `4CH ellipticity/circularity rate`、`Sphericity index rate` | −20 | 20 | — |
+| `Annular expansion rate`、`Longitudinal stretching rate` | −20 | 20 | cm/s |
 
-若需修改范围，直接编辑 `utils/clean_la_params.py` 中的 `LA_PHYSIO_RANGES` 字典即可。
+**第二层人工复核阈值**（超出仅标 flag，不删除）：
+
+| 参数 | 下界 | 上界 | 单位 |
+|------|------|------|------|
+| `LAVmax` | 5 | 250 | mL |
+| `LAVI` | 3 | 150 | mL/m² |
+| `LAVmin` | 3 | 200 | mL |
+| `LAVmin-i` | 1 | 120 | mL/m² |
+| `LAEF` | 5 | 90 | % |
+| `LAD-long` | 2 | 9 | cm |
+| `LAD-trans` | 1 | 8 | cm |
+| `LASr` | −20 | 80 | % |
+| `LASct` / `GCS` / `LS` / `AS` | −80 | 20 | % |
+| `LASrR` / `GCSR` / `LSR` / `ASR` | −8 | 8 | s⁻¹ |
+| `4CH` 系列速率 / `Annular expansion rate` 等 | −8 | 8 | — |
 
 **输出文件**（默认 `csv/la_params/processed/`）：
 
@@ -902,6 +920,13 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 | `la_params_missingness_morph.csv` | 形态表缺失率报告 |
 | `la_params_missingness_kine.csv` | 运动表缺失率报告 |
 | `la_params_feature_decisions.csv` | 特征决策汇总（保留 / 剔除） |
+| `la_params_cross_check_log.csv` | 跨列约束违规记录（第一层补充） |
+| `la_params_review_log_morph.csv` | 形态表第二层复核标记汇总 |
+| `la_params_review_log_kine.csv` | 运动表第二层复核标记汇总 |
+| `la_params_iqr_outliers_morph.csv` | 形态表未收录参数 IQR 异常值统计 |
+| `la_params_iqr_outliers_kine.csv` | 运动表未收录参数 IQR 异常值统计 |
+| `la_params_iqr_outliers_morph.png` | 形态表 IQR 异常值可视化（需 matplotlib） |
+| `la_params_iqr_outliers_kine.png` | 运动表 IQR 异常值可视化（需 matplotlib） |
 
 **运行命令**：
 
@@ -914,6 +939,9 @@ python utils/clean_la_params.py ^
 
 :: 仅生成缺失率报告（不写输出文件）：
 python utils/clean_la_params.py --report_only
+
+:: 跳过 IQR 图表生成（无 matplotlib 环境）：
+python utils/clean_la_params.py --no_plots
 ```
 
 ---
