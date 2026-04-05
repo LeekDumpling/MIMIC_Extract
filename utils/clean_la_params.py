@@ -526,7 +526,7 @@ def apply_review_flags_wide(
             continue
         if col.endswith("_review_flag") or col.endswith("_missing_flag"):
             continue
-        if not pd.api.types.is_numeric_dtype(df[col]):
+        if df[col].dtype.kind not in ("f", "i", "u"):
             continue
 
         base = col.split("__")[0] if "__" in col else col
@@ -544,11 +544,8 @@ def apply_review_flags_wide(
         if hi is not None:
             is_outside = is_outside | (vals > hi)
 
-        # Build Int8 array: 0/1 for valid rows, NA for NaN rows
-        flag_arr = pd.array(is_outside.reindex(df.index).fillna(False).astype(int),
-                            dtype="Int8")
-        flag_arr[~valid_mask.values] = pd.NA
-        df[flag_col] = flag_arr
+        # Build nullable Int8 flag: True→1, False→0, NaN rows→pd.NA
+        df[flag_col] = is_outside.astype("Int8").reindex(df.index)
 
         n_flagged = int(is_outside.sum())
         if n_flagged > 0:
@@ -608,7 +605,7 @@ def compute_iqr_outlier_stats(
             continue
         if col.endswith("_review_flag") or col.endswith("_missing_flag"):
             continue
-        if not pd.api.types.is_numeric_dtype(df[col]):
+        if df[col].dtype.kind not in ("f", "i", "u"):
             continue
         if _is_binary_col(df[col]):
             continue
@@ -648,16 +645,17 @@ def compute_iqr_outlier_stats(
             "pct_outlier":     round((n_lo + n_hi) / len(vals) * 100, 2),
         })
 
+    if not rows:
+        print("  [IQR 统计] 无未收录参数列（或所有列均有预定义范围）")
+        return pd.DataFrame()
+
     result = (
         pd.DataFrame(rows)
         .sort_values("pct_outlier", ascending=False)
         .reset_index(drop=True)
     )
-    if len(result):
-        print(f"  [IQR 统计] {len(result)} 个未收录参数列，"
-              f"最高异常值比例 {result['pct_outlier'].iloc[0]:.1f}%")
-    else:
-        print("  [IQR 统计] 无未收录参数列（或所有列均有预定义范围）")
+    print(f"  [IQR 统计] {len(result)} 个未收录参数列，"
+          f"最高异常值比例 {result['pct_outlier'].iloc[0]:.1f}%")
     return result
 
 
@@ -913,17 +911,17 @@ def normalise_wide(
     for col in df.columns:
         if col in no_norm:
             continue
-        if not pd.api.types.is_numeric_dtype(df[col]):
+        if df[col].dtype.kind not in ("f", "i", "u"):
             continue
         if _is_binary_col(df[col]):
             continue
 
-        vals = df[col].dropna().values.astype(float)
+        vals = df[col].dropna().to_numpy(dtype=float)
         if len(vals) < 2:
             continue
         skew = float(pd.Series(vals).skew())
 
-        col_vals = df[col].values.astype(float)
+        col_vals = df[col].to_numpy(dtype=float, na_value=np.nan).copy()
         valid_mask = ~np.isnan(col_vals)
 
         if abs(skew) > _SKEW_THRESH:
