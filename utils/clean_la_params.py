@@ -40,6 +40,8 @@
   la_params_iqr_outliers_kine.csv     运动表未收录参数 IQR 异常值统计
   la_params_iqr_outliers_morph.png    形态表 IQR 异常值可视化（需要 matplotlib）
   la_params_iqr_outliers_kine.png     运动表 IQR 异常值可视化（需要 matplotlib）
+  la_params_review_priority_summary.csv  按复核标记总数排序的视频汇总（一行一视频）
+  la_params_review_priority_detail.csv   每处异常的具体参数值（一行一处异常）
 
 语义约定（务必遵守）
   - max_idx → LAVmax；min_idx → LAVmin
@@ -659,6 +661,147 @@ def compute_iqr_outlier_stats(
     return result
 
 
+def _setup_cjk_font() -> None:
+    """
+    配置 matplotlib 以正确渲染中文字符。
+
+    按优先级尝试常见 CJK 字体（Windows / macOS / Linux），
+    若均未找到则发出警告并使用系统默认字体（中文可能显示为方块）。
+    同时禁用 unicode_minus 以避免负号乱码。
+    """
+    import matplotlib
+    import matplotlib.font_manager as fm
+
+    cjk_candidates = [
+        "SimHei", "Microsoft YaHei", "SimSun", "FangSong", "NSimSun",  # Windows
+        "STHeiti", "PingFang SC", "Heiti SC", "Hiragino Sans GB",        # macOS
+        "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",                      # Linux
+        "Noto Sans CJK SC", "Source Han Sans CN", "Droid Sans Fallback", # 通用
+    ]
+
+    available = {f.name for f in fm.fontManager.ttflist}
+    chosen = next((f for f in cjk_candidates if f in available), None)
+
+    if chosen:
+        matplotlib.rcParams["font.family"] = [chosen, "DejaVu Sans"]
+    else:
+        warnings.warn(
+            "未找到 CJK 字体，图表中文可能显示为方块。\n"
+            "Windows 用户请确认已安装 SimHei 或 Microsoft YaHei；\n"
+            "Linux 用户请安装：apt-get install fonts-wqy-microhei\n"
+            "或执行：pip install fonttools && fc-cache -fv",
+            UserWarning,
+        )
+    matplotlib.rcParams["axes.unicode_minus"] = False
+
+
+# ---------------------------------------------------------------------------
+# 步骤 4e：复核优先级汇总（按视频聚合 review_flag）
+# ---------------------------------------------------------------------------
+
+def build_review_priority_table(
+    morph_wide: pd.DataFrame,
+    kine_wide: pd.DataFrame,
+    id_cols: List[str],
+    review_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = LA_REVIEW_RANGES,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    基于宽表中的 *_review_flag 列，按视频聚合复核优先级。
+
+    返回
+    ----
+    summary_df : 每视频一行，按 n_flags_total 降序排列
+        列：id_cols + n_flags_morphology + n_flags_kinematic + n_flags_total
+               + flagged_params（逗号分隔的超范围参数名列表）
+    detail_df  : 每处异常一行（长格式）
+        列：id_cols + table + param + value + review_lo + review_hi
+    """
+    safe_review: Dict[str, Tuple[Optional[float], Optional[float]]] = {
+        _safe_col_name(k): v for k, v in review_ranges.items()
+    }
+
+    def _process_table(
+        df: pd.DataFrame, table_name: str
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        id_present = [c for c in id_cols if c in df.columns]
+        flag_cols = [c for c in df.columns if c.endswith("_review_flag")]
+
+        # Per-video flag counts: use == 1 with fillna to handle nullable Int8
+        flag_vals = df[flag_cols].apply(lambda s: (s == 1).fillna(False).astype(int), axis=0)
+        per_video = df[id_present].copy()
+        per_video[f"n_flags_{table_name}"] = flag_vals.sum(axis=1).values
+
+        # Flagged parameter list per video
+        def _flagged_list(row: "pd.Series") -> str:
+            names = [
+                fc[: -len("_review_flag")]
+                for fc in flag_cols
+                if row[fc] is True or row[fc] == 1
+            ]
+            return ", ".join(names)
+
+        per_video["flagged_params"] = flag_vals.apply(_flagged_list, axis=1)
+
+        # Detail rows: flag_vals already has int 0/1, so use it for masking
+        detail_rows = []
+        for fc in flag_cols:
+            param = fc[: -len("_review_flag")]
+            base = param.split("__")[0] if "__" in param else param
+            lo, hi = safe_review.get(base, (None, None))
+            flagged_mask = flag_vals[fc] == 1
+            for _, row in df[flagged_mask].iterrows():
+                detail_rows.append(
+                    {
+                        **{c: row[c] for c in id_present},
+                        "table":     table_name,
+                        "param":     param,
+                        "value":     row.get(param, np.nan),
+                        "review_lo": lo,
+                        "review_hi": hi,
+                    }
+                )
+
+        return per_video, pd.DataFrame(detail_rows)
+
+    summary_m, detail_m = _process_table(morph_wide, "morphology")
+    summary_k, detail_k = _process_table(kine_wide,  "kinematic")
+
+    merge_keys = [c for c in ["video_prefix", "subject_id"]
+                  if c in summary_m.columns and c in summary_k.columns]
+    extra_m = [c for c in id_cols if c in summary_m.columns and c not in merge_keys]
+    extra_k = [c for c in id_cols if c in summary_k.columns and c not in merge_keys]
+
+    left  = summary_m[merge_keys + extra_m + ["n_flags_morphology", "flagged_params"]]
+    right = summary_k[merge_keys + extra_k + ["n_flags_kinematic",  "flagged_params"]]
+
+    summary = left.merge(right, on=merge_keys, how="outer", suffixes=("_morph", "_kine"))
+    summary["n_flags_morphology"] = summary["n_flags_morphology"].fillna(0).astype(int)
+    summary["n_flags_kinematic"]  = summary["n_flags_kinematic"].fillna(0).astype(int)
+    summary["n_flags_total"]      = (
+        summary["n_flags_morphology"] + summary["n_flags_kinematic"]
+    )
+    # Merge flagged_params columns
+    fp_m = summary.pop("flagged_params_morph").fillna("")
+    fp_k = summary.pop("flagged_params_kine").fillna("")
+    summary["flagged_params"] = (
+        (fp_m + ", " + fp_k)
+        .str.strip(", ")
+        .str.replace(r",\s*,", ",", regex=True)
+        .str.strip(", ")
+    )
+    summary = summary.sort_values("n_flags_total", ascending=False).reset_index(drop=True)
+
+    detail = pd.concat([detail_m, detail_k], ignore_index=True)
+
+    n_flagged_videos = int((summary["n_flags_total"] > 0).sum())
+    max_flags = int(summary["n_flags_total"].iloc[0]) if len(summary) else 0
+    print(
+        f"  [复核优先级] {n_flagged_videos} 个视频存在复核标记，"
+        f"单视频最多 {max_flags} 处"
+    )
+    return summary, detail
+
+
 def plot_iqr_outliers(
     iqr_stats: pd.DataFrame,
     output_path: str,
@@ -692,6 +835,8 @@ def plot_iqr_outliers(
             UserWarning,
         )
         return None
+
+    _setup_cjk_font()
 
     df = iqr_stats.copy()
     n_params = len(df)
@@ -1083,6 +1228,12 @@ def process_la_params(
         kine_wide, skip_cols=id_cols, defined_params=safe_defined
     )
 
+    # 7d. 复核优先级汇总（按视频聚合 review_flag，在标准化之前）
+    print("\n  --- 复核优先级汇总 ---")
+    review_priority_summary, review_priority_detail = build_review_priority_table(
+        morph_wide, kine_wide, id_cols
+    )
+
     # 8. 标准化
     if not no_normalise:
         morph_wide, norm_log_m = normalise_wide(morph_wide, skip_cols=id_cols)
@@ -1113,6 +1264,8 @@ def process_la_params(
     iqr_k_csv_path    = os.path.join(output_dir, "la_params_iqr_outliers_kine.csv")
     iqr_m_png_path    = os.path.join(output_dir, "la_params_iqr_outliers_morph.png")
     iqr_k_png_path    = os.path.join(output_dir, "la_params_iqr_outliers_kine.png")
+    priority_sum_path = os.path.join(output_dir, "la_params_review_priority_summary.csv")
+    priority_det_path = os.path.join(output_dir, "la_params_review_priority_detail.csv")
 
     morph_wide.to_csv(morph_path,  index=False)
     kine_wide.to_csv(kine_path,    index=False)
@@ -1124,6 +1277,8 @@ def process_la_params(
     review_log_kine.to_csv(review_k_path,  index=False)
     iqr_stats_morph.to_csv(iqr_m_csv_path, index=False)
     iqr_stats_kine.to_csv(iqr_k_csv_path,  index=False)
+    review_priority_summary.to_csv(priority_sum_path, index=False)
+    review_priority_detail.to_csv(priority_det_path,  index=False)
 
     # 汇总特征决策
     feat_all = pd.concat([
@@ -1143,29 +1298,41 @@ def process_la_params(
             title="IQR 异常值统计 — 运动表未收录参数",
         )
 
+    # 打印 Top-10 最需复核视频
+    top10 = review_priority_summary[review_priority_summary["n_flags_total"] > 0].head(10)
+    if len(top10):
+        print("\n  --- Top-10 最需复核视频（按总标记数降序）---")
+        display_cols = [c for c in ["video_prefix", "subject_id", "n_flags_morphology",
+                                     "n_flags_kinematic", "n_flags_total", "flagged_params"]
+                        if c in top10.columns]
+        print(top10[display_cols].to_string(index=False))
+
     saved_files = [
         morph_path, kine_path, qc_out_path,
         miss_m_path, miss_k_path, feat_path,
         cross_log_path, review_m_path, review_k_path,
         iqr_m_csv_path, iqr_k_csv_path,
+        priority_sum_path, priority_det_path,
     ]
     print(f"\n  输出文件：")
     for p in saved_files:
         print(f"    {p}")
 
     return {
-        "morphology_wide":   morph_wide,
-        "kinematic_wide":    kine_wide,
-        "qc_filtered":       df_qc,
-        "missingness_morph": miss_morph,
-        "missingness_kine":  miss_kine,
-        "outlier_log_morph": outlier_morph,
-        "outlier_log_kine":  outlier_kine,
-        "cross_check_log":   cross_check_log,
-        "review_log_morph":  review_log_morph,
-        "review_log_kine":   review_log_kine,
-        "iqr_stats_morph":   iqr_stats_morph,
-        "iqr_stats_kine":    iqr_stats_kine,
+        "morphology_wide":          morph_wide,
+        "kinematic_wide":           kine_wide,
+        "qc_filtered":              df_qc,
+        "missingness_morph":        miss_morph,
+        "missingness_kine":         miss_kine,
+        "outlier_log_morph":        outlier_morph,
+        "outlier_log_kine":         outlier_kine,
+        "cross_check_log":          cross_check_log,
+        "review_log_morph":         review_log_morph,
+        "review_log_kine":          review_log_kine,
+        "iqr_stats_morph":          iqr_stats_morph,
+        "iqr_stats_kine":           iqr_stats_kine,
+        "review_priority_summary":  review_priority_summary,
+        "review_priority_detail":   review_priority_detail,
     }
 
 
