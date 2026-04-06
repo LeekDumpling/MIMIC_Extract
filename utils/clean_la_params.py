@@ -120,21 +120,21 @@ LA_AUTO_REMOVE_RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     "MAT area":                     (0.0,    None),   # > 0 cm²
     "TGAR":                         (0.0,     1.0),   # 0–1（三角形/整体面积）
     # 运动学参数
-    "LASr":                         (-100.0, 100.0),  # %
-    "LASrR":                        (-20.0,   20.0),  # s^-1
+    # "LASr":                         (-100.0, 100.0),  # %
+    # "LASrR":                        (-20.0,   20.0),  # s^-1
     "Time to peak LASrR":           (0.0,    100.0),  # %cycle
-    "LASct":                        (-100.0, 100.0),  # %
-    "GCS":                          (-100.0, 100.0),  # %
-    "GCSR":                         (-20.0,   20.0),  # s^-1
-    "LS":                           (-100.0, 100.0),  # %
-    "LSR":                          (-20.0,   20.0),  # s^-1
-    "AS":                           (-100.0, 100.0),  # %
-    "ASR":                          (-20.0,   20.0),  # s^-1
-    "4CH ellipticity rate":         (-20.0,   20.0),  # 无量纲
-    "4CH circularity rate":         (-20.0,   20.0),  # 无量纲
-    "Sphericity index rate":        (-20.0,   20.0),  # 无量纲
-    "Annular expansion rate":       (-20.0,   20.0),  # cm/s
-    "Longitudinal stretching rate": (-20.0,   20.0),  # cm/s
+    # "LASct":                        (-100.0, 100.0),  # %
+    # "GCS":                          (-100.0, 100.0),  # %
+    # "GCSR":                         (-20.0,   20.0),  # s^-1
+    # "LS":                           (-100.0, 100.0),  # %
+    # "LSR":                          (-20.0,   20.0),  # s^-1
+    # "AS":                           (-100.0, 100.0),  # %
+    # "ASR":                          (-20.0,   20.0),  # s^-1
+    # "4CH ellipticity rate":         (-20.0,   20.0),  # 无量纲
+    # "4CH circularity rate":         (-20.0,   20.0),  # 无量纲
+    # "Sphericity index rate":        (-20.0,   20.0),  # 无量纲
+    # "Annular expansion rate":       (-20.0,   20.0),  # cm/s
+    # "Longitudinal stretching rate": (-20.0,   20.0),  # cm/s
 }
 
 # ---------------------------------------------------------------------------
@@ -159,16 +159,16 @@ LA_REVIEW_RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     "MAT area":                     (0.5,    30.0),  # cm²
     "TGAR":                         (0.05,    1.0),  # 无量纲
     # 运动学参数
-    "LASr":                         (-20.0,  80.0),  # %
-    "LASrR":                        (-8.0,    8.0),  # s^-1
+    # "LASr":                         (-20.0,  80.0),  # %
+    # "LASrR":                        (-8.0,    8.0),  # s^-1
     "Time to peak LASrR":           (0.0,   100.0),  # %cycle
-    "LASct":                        (-80.0,  20.0),  # %
-    "GCS":                          (-80.0,  20.0),  # %
-    "GCSR":                         (-8.0,    8.0),  # s^-1
-    "LS":                           (-80.0,  20.0),  # %
-    "LSR":                          (-8.0,    8.0),  # s^-1
-    "AS":                           (-80.0,  20.0),  # %
-    "ASR":                          (-8.0,    8.0),  # s^-1
+    # "LASct":                        (-80.0,  20.0),  # %
+    # "GCS":                          (-80.0,  20.0),  # %
+    # "GCSR":                         (-8.0,    8.0),  # s^-1
+    # "LS":                           (-80.0,  20.0),  # %
+    # "LSR":                          (-8.0,    8.0),  # s^-1
+    # "AS":                           (-80.0,  20.0),  # %
+    # "ASR":                          (-8.0,    8.0),  # s^-1
     "4CH ellipticity rate":         (-8.0,    8.0),  # 无量纲
     "4CH circularity rate":         (-8.0,    8.0),  # 无量纲
     "Sphericity index rate":        (-8.0,    8.0),  # 无量纲
