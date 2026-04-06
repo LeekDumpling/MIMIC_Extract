@@ -5,9 +5,9 @@
 功能
 ----
 读取由 EchoGraphs 模块生成的三张左心房（LA）参数文件：
-  - la_morphology_results.csv   形态学参数长表
-  - la_kinematic_stats.csv      运动学参数长表（含 sub_item）
-  - la_analysis_qc.csv          质量控制与元数据表
+  - final_morphology_results.csv   形态学参数长表
+  - final_kinematic_stats.csv      运动学参数长表（含 sub_item；充盈段/排空段分阶段统计）
+  - final_qc.csv                   质量控制与元数据表
 
 对这三张表进行：
   1. QC 过滤       — 依据 la_analysis_qc.csv 中的 status 字段，按可配置策略剔除
@@ -48,12 +48,18 @@
   - 所有 value 空字符串均表示"当前不可用"，绝不能按 0 处理
   - 速率类参数依赖真实 fps；BSA 参数依赖外部 clinical CSV
   - 当前参数均来自模型连续 28 点轮廓，非人工真值
+  - 运动学时相定义：fill = LAVmin → next LAVmax；empty = LAVmax → LAVmin
+    sub_item 格式为 fill_peak / fill_mean / empty_drop / empty_mean_drop /
+    empty_trough / empty_mean / empty_min / empty_mean（视参数而定）；
+    Time to peak LASrR 使用 from_LAVmin 子项
+  - 勿将 sub_item 映射为旧 ED/ES 语义；勿依赖已废弃的整周期子项
+    （peak / mean / range / min / peak_expansion 等）
 
 用法（从仓库根目录或 utils/ 子目录均可运行）
   python utils/clean_la_params.py \\
-      --morphology  path/to/la_morphology_results.csv \\
-      --kinematic   path/to/la_kinematic_stats.csv \\
-      --qc          path/to/la_analysis_qc.csv \\
+      --morphology  path/to/final_morphology_results.csv \\
+      --kinematic   path/to/final_kinematic_stats.csv \\
+      --qc          path/to/final_qc.csv \\
       --output_dir  csv/la_params/processed
 
   # 仅生成缺失率报告，不写输出文件：
@@ -123,7 +129,7 @@ LA_AUTO_REMOVE_RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     # "LASr":                         (-100.0, 100.0),  # %
     # "LASrR":                        (-20.0,   20.0),  # s^-1
     "Time to peak LASrR":           (0.0,    100.0),  # %cycle
-    # "LASct":                        (-100.0, 100.0),  # %
+    # "LASct-proxy":                  (-100.0, 100.0),  # %
     # "GCS":                          (-100.0, 100.0),  # %
     # "GCSR":                         (-20.0,   20.0),  # s^-1
     # "LS":                           (-100.0, 100.0),  # %
@@ -162,7 +168,7 @@ LA_REVIEW_RANGES: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     # "LASr":                         (-20.0,  80.0),  # %
     # "LASrR":                        (-8.0,    8.0),  # s^-1
     "Time to peak LASrR":           (0.0,   100.0),  # %cycle
-    # "LASct":                        (-80.0,  20.0),  # %
+    # "LASct-proxy":                  (-80.0,  20.0),  # %
     # "GCS":                          (-80.0,  20.0),  # %
     # "GCSR":                         (-8.0,    8.0),  # s^-1
     # "LS":                           (-80.0,  20.0),  # %
@@ -205,6 +211,39 @@ _NO_NORM_COLS = {"video_prefix", "subject_id", "study_id", "source_group",
 
 # 正态性判断：|偏度| ≤ 此阈值 → 近正态（与 la_analysis.py 保持一致）
 _SKEW_THRESH: float = 1.0
+
+# ---------------------------------------------------------------------------
+# 运动学参数 schema（充盈段/排空段分阶段统计，final_kinematic_stats.csv）
+# 时相定义：fill = LAVmin → next LAVmax；empty = LAVmax → LAVmin
+# ---------------------------------------------------------------------------
+
+# 当前版本的合法 sub_item 集合（用于加载时检测废弃子项）
+KINE_KNOWN_SCHEMA: Dict[str, List[str]] = {
+    "LASr":                        ["fill_peak"],
+    "LASrR":                       ["fill_peak", "fill_mean"],
+    "Time to peak LASrR":          ["from_LAVmin"],
+    "LASct-proxy":                 ["empty_drop"],
+    "GCS":                         ["fill_peak", "fill_mean", "empty_drop", "empty_mean_drop"],
+    "LS":                          ["fill_peak", "fill_mean", "empty_drop", "empty_mean_drop"],
+    "AS":                          ["fill_peak", "fill_mean", "empty_drop", "empty_mean_drop"],
+    "GCSR":                        ["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+    "LSR":                         ["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+    "ASR":                         ["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+    "4CH ellipticity rate":        ["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+    "4CH circularity rate":        ["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+    "Sphericity index rate":       ["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+    "MAT area":                    ["fill_peak", "fill_mean", "empty_min",    "empty_mean"],
+    "TGAR":                        ["fill_peak", "fill_mean", "empty_min",    "empty_mean"],
+    "Annular expansion rate":      ["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+    "Longitudinal stretching rate":["fill_peak", "fill_mean", "empty_trough", "empty_mean"],
+}
+
+# 已废弃的整周期 sub_item 值（若在输入文件中检测到则发出警告）
+_DEPRECATED_KINE_SUB_ITEMS: frozenset = frozenset({
+    "peak", "mean", "range", "min",
+    "peak_expansion", "peak_contraction",
+    "peak_stretch", "peak_compression",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -288,9 +327,22 @@ def load_la_files(
             df["value"] = pd.to_numeric(df["value"], errors="coerce")
         return df
 
-    df_morph = _load(morphology_path, required_morph, "la_morphology_results")
-    df_kine  = _load(kinematic_path,  required_kine,  "la_kinematic_stats")
-    df_qc    = _load(qc_path,         required_qc,    "la_analysis_qc")
+    df_morph = _load(morphology_path, required_morph, "final_morphology_results")
+    df_kine  = _load(kinematic_path,  required_kine,  "final_kinematic_stats")
+    df_qc    = _load(qc_path,         required_qc,    "final_qc")
+
+    # 检测废弃的整周期 sub_item（若发现说明文件版本与预期不符）
+    found_deprecated = (
+        set(df_kine["sub_item"].dropna().astype(str).unique())
+        & _DEPRECATED_KINE_SUB_ITEMS
+    )
+    if found_deprecated:
+        warnings.warn(
+            f"final_kinematic_stats 中检测到已废弃的整周期 sub_item：{sorted(found_deprecated)}\n"
+            "当前版本仅支持分阶段子项（fill_peak / fill_mean / empty_drop 等）。\n"
+            "请确认输入文件是否为旧版本格式。",
+            UserWarning,
+        )
 
     print(f"  [加载] 形态表  {df_morph.shape[0]:>5} 行 × {df_morph.shape[1]} 列")
     print(f"  [加载] 运动表  {df_kine.shape[0]:>5} 行 × {df_kine.shape[1]} 列")
@@ -907,6 +959,11 @@ def pivot_kinematic(df: pd.DataFrame) -> pd.DataFrame:
     主键：video_prefix
     列名：parameter_name + "__" + sub_item（安全化）
     附加元数据列：subject_id, study_id, source_group
+
+    sub_item 格式（充盈段/排空段分阶段，final_kinematic_stats.csv 新 schema）：
+      fill_peak / fill_mean / empty_drop / empty_mean_drop /
+      empty_trough / empty_mean / empty_min / from_LAVmin
+    示例列名：LASr__fill_peak, GCS__empty_drop, Time_to_peak_LASrR__from_LAVmin
     """
     id_cols = ["video_prefix", "subject_id", "study_id", "source_group"]
     id_cols = [c for c in id_cols if c in df.columns]
@@ -1347,18 +1404,18 @@ def main() -> None:
     )
     ap.add_argument(
         "--morphology",
-        default="csv/la_params/la_morphology_results.csv",
-        help="la_morphology_results.csv 路径",
+        default="csv/la_params/final_morphology_results.csv",
+        help="final_morphology_results.csv 路径",
     )
     ap.add_argument(
         "--kinematic",
-        default="csv/la_params/la_kinematic_stats.csv",
-        help="la_kinematic_stats.csv 路径",
+        default="csv/la_params/final_kinematic_stats.csv",
+        help="final_kinematic_stats.csv 路径（充盈段/排空段分阶段 schema）",
     )
     ap.add_argument(
         "--qc",
-        default="csv/la_params/la_analysis_qc.csv",
-        help="la_analysis_qc.csv 路径",
+        default="csv/la_params/final_qc.csv",
+        help="final_qc.csv 路径",
     )
     ap.add_argument(
         "--output_dir",
