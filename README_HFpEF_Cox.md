@@ -66,10 +66,10 @@ csv/survival/                 # 步骤 6 — 生存终点构建后的 CSV
 csv/feature_selection/        # 步骤 7 — 特征选择结果
 csv/cox_models/               # 步骤 8 — Cox 模型结果
 csv/cox_models/ph_test/       # 步骤 9 — PH 假设检验结果
-csv/la_params/                # LA 参数原始文件（来自 EchoGraphs 模块）
-  la_morphology_results.csv   #   形态学参数长表
-  la_kinematic_stats.csv      #   运动学参数长表
-  la_analysis_qc.csv          #   质量控制与元数据表
+csv/la_params/                    # LA 参数原始文件（来自 EchoGraphs 模块）
+  final_morphology_results.csv  #   形态学参数长表
+  final_kinematic_stats.csv     #   运动学参数长表
+  final_qc.csv                  #   质量控制与元数据表
 csv/la_params/processed/      # 步骤 A1 — LA 参数清洗输出（宽表）
 csv/la_analysis/              # 步骤 A2 — LA × 临床联合分析输出
 resources/                    # MIMIC-Extract variable_ranges.csv 等资源文件

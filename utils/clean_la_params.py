@@ -10,7 +10,7 @@
   - final_qc.csv                   质量控制与元数据表
 
 对这三张表进行：
-  1. QC 过滤       — 依据 la_analysis_qc.csv 中的 status 字段，按可配置策略剔除
+  1. QC 过滤       — 依据 final_qc.csv 中的 status 字段，按可配置策略剔除
   2. 异常值检查（两层）：
        第一层（自动剔除）— 仅去除"几何/数学不可能"或"明显测量失败"的值，
          目标是不误删真实患者；超出范围的值置为 NaN，保留行。
@@ -1167,9 +1167,9 @@ def process_la_params(
 
     参数
     ----
-    morphology_path   : la_morphology_results.csv 路径
-    kinematic_path    : la_kinematic_stats.csv 路径
-    qc_path           : la_analysis_qc.csv 路径
+    morphology_path   : final_morphology_results.csv 路径
+    kinematic_path    : final_kinematic_stats.csv 路径
+    qc_path           : final_qc.csv 路径
     output_dir        : 输出目录
     report_only       : 仅生成报告，不写输出文件
     hard_filter_codes : 硬过滤状态码集合（默认使用 QC_HARD_FILTER_CODES）
