@@ -836,9 +836,9 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 
 | 输入文件 | 说明 |
 |----------|------|
-| `la_morphology_results.csv` | 形态学参数长表（主键：`video_prefix + parameter_name`） |
-| `la_kinematic_stats.csv` | 运动学 / 应变参数长表（主键：`video_prefix + parameter_name + sub_item`） |
-| `la_analysis_qc.csv` | 质量控制与元数据表（必须同时使用） |
+| `final_morphology_results.csv` | 形态学参数长表（主键：`video_prefix + parameter_name`） |
+| `final_kinematic_stats.csv` | 运动学 / 应变参数长表（主键：`video_prefix + parameter_name + sub_item`） |
+| `final_qc.csv` | 质量控制与元数据表（必须同时使用） |
 
 **重要语义约定**：
 - `max_idx → LAVmax`，`min_idx → LAVmin`；**不**按旧 `ED/ES` 假设映射
@@ -946,9 +946,9 @@ from ph_viz import plot_covariate_effects, plot_forest, plot_cindex_summary
 
 ```bat
 python utils/clean_la_params.py ^
-  --morphology csv/la_params/la_morphology_results.csv ^
-  --kinematic  csv/la_params/la_kinematic_stats.csv ^
-  --qc         csv/la_params/la_analysis_qc.csv ^
+  --morphology csv/la_params/final_morphology_results.csv ^
+  --kinematic  csv/la_params/final_kinematic_stats.csv ^
+  --qc         csv/la_params/final_qc.csv ^
   --output_dir csv/la_params/processed
 
 :: 仅生成缺失率报告（不写输出文件）：
@@ -1158,11 +1158,11 @@ python utils/model_evaluation.py
 ### 步骤 A1–A2：LA 影像参数清洗与联合分析
 
 > **前提**：将 EchoGraphs 输出的三张 CSV 放置于 `csv/la_params/`，  
-> 文件名须为 `la_morphology_results.csv`、`la_kinematic_stats.csv`、`la_analysis_qc.csv`。
+> 文件名须为 `final_morphology_results.csv`、`final_kinematic_stats.csv`、`final_qc.csv`。
 
 ```bat
 :: A1 — LA 参数清洗
-python utils/clean_la_params.py --morphology csv/la_params/la_morphology_results.csv --kinematic csv/la_params/la_kinematic_stats.csv --qc csv/la_params/la_analysis_qc.csv --output_dir csv/la_params/processed
+python utils/clean_la_params.py --morphology csv/la_params/final_morphology_results.csv --kinematic csv/la_params/final_kinematic_stats.csv --qc csv/la_params/final_qc.csv --output_dir csv/la_params/processed
 
 :: A2 — LA × MIMIC 临床参数联合分析（以 hadm 时间窗为例）
 python utils/la_analysis.py ^
