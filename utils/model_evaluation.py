@@ -251,6 +251,33 @@ def _prepare_df_model(
     return df_m, feat
 
 
+def _rebuild_strata_columns(
+    df: pd.DataFrame,
+    violating_vars: List[str],
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Recreate stratification columns from the original violating covariates."""
+    df_m = df.copy()
+    strata_cols: List[str] = []
+
+    for var in violating_vars:
+        if var not in df_m.columns:
+            continue
+        is_continuous = df_m[var].nunique(dropna=True) > 5
+        if is_continuous:
+            strata_col = f"{var}_q4"
+            df_m[strata_col] = pd.qcut(
+                df_m[var],
+                q=4,
+                labels=False,
+                duplicates="drop",
+            ).astype(int)
+            strata_cols.append(strata_col)
+        else:
+            strata_cols.append(var)
+
+    return df_m, strata_cols
+
+
 # ---------------------------------------------------------------------------
 # Bootstrap C-index (Harrell's optimism-correction method)
 # ---------------------------------------------------------------------------
@@ -867,12 +894,19 @@ def main() -> None:
         tvc_rec = tvc_map.get(label)
         eval_features: List[str] = list(features)
         eval_strata: List[str] = []
+        violating_vars: List[str] = []
+        df_input = df_base
         if tvc_rec:
             method = tvc_rec.get("correction_method", "")
             if method == "stratification":
                 # Violating covariate was moved to strata; use remaining features
                 eval_features = list(tvc_rec.get("remaining_features", features))
                 eval_strata   = list(tvc_rec.get("strata_cols", []))
+                violating_vars = list(tvc_rec.get("violating_covariates", []))
+                if eval_strata and not set(eval_strata).issubset(df_input.columns) and violating_vars:
+                    df_input, rebuilt_strata = _rebuild_strata_columns(df_input, violating_vars)
+                    if rebuilt_strata:
+                        eval_strata = rebuilt_strata
                 print(f"  Stratification-corrected model: "
                       f"features={eval_features}, strata={eval_strata}")
             else:
@@ -884,7 +918,7 @@ def main() -> None:
                       f"data leakage.")
 
         df_model, eval_features = _prepare_df_model(
-            df_base, eval_features, event_col, time_col,
+            df_input, eval_features, event_col, time_col,
             strata_cols=eval_strata,
         )
 

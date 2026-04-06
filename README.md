@@ -8,6 +8,12 @@ This repo contains code for **MIMIC-Extract**. It has been divided into the foll
 * Utils: scripts and detailed instructions for running **MIMIC-Extract** data pipeline.
 * `mimic_direct_extract.py`: extraction script. 
 
+## Project-specific HFpEF / LA pipeline
+
+This workspace also includes an HFpEF survival-analysis extension with left atrial (LA) image-parameter cleaning,
+three-window parameter-performance analysis, and LA-fused Cox modeling. The current runnable instructions are in
+`utils/README_LA_PIPELINE.md`.
+
 # Paper
 If you use this code in your research, please cite the following publication:
 

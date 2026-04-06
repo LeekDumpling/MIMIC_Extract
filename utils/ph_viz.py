@@ -46,29 +46,60 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _CJK_CANDIDATES = [
-    "SimHei", "Microsoft YaHei", "WenQuanYi Micro Hei",
-    "Heiti SC", "PingFang SC", "Noto Sans CJK SC",
-    "Source Han Sans CN", "AR PL UMing CN",
-    "STHeiti", "Noto Sans SC", "FangSong",
+    "Microsoft YaHei",
+    "SimHei",
+    "PingFang SC",
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Source Han Sans CN",
+    "FangSong",
+    "Heiti SC",
+    "STHeiti",
+    "WenQuanYi Micro Hei",
+    "AR PL UMing CN",
 ]
 
 
-def setup_chinese_font() -> bool:
-    """Try to configure matplotlib to use a CJK font.
+def setup_chinese_font(
+    font_family: Optional[str] = None,
+    strict: bool = False,
+) -> bool:
+    """Configure matplotlib to use a Chinese-capable font.
 
-    Returns True if a CJK font was found and configured.
+    Parameters
+    ----------
+    font_family:
+        Optional explicit font family name. When provided, only this font is
+        accepted.
+    strict:
+        When True, raise ``RuntimeError`` if no usable font is available.
+
+    Returns
+    -------
+    bool
+        True when a font was successfully configured, otherwise False.
     """
     if not _HAS_MPL:
+        if strict:
+            raise RuntimeError("matplotlib is unavailable; cannot configure Chinese fonts.")
         return False
     from matplotlib import font_manager as fm
     available = {f.name for f in fm.fontManager.ttflist}
-    for name in _CJK_CANDIDATES:
+    candidates = [font_family] if font_family else list(_CJK_CANDIDATES)
+    for name in candidates:
         if name in available:
             matplotlib.rcParams["font.sans-serif"] = (
                 [name] + list(matplotlib.rcParams.get("font.sans-serif", []))
             )
             matplotlib.rcParams["axes.unicode_minus"] = False
             return True
+    if strict:
+        if font_family:
+            raise RuntimeError(f"Requested Chinese font is not installed: {font_family}")
+        raise RuntimeError(
+            "No supported Chinese font was found. Install one of: "
+            + ", ".join(_CJK_CANDIDATES[:7])
+        )
     return False
 
 

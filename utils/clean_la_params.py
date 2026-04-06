@@ -281,6 +281,65 @@ def _safe_col_name(name: str) -> str:
     return name
 
 
+def _mode_or_first_non_null(series: "pd.Series") -> str:
+    """Return a stable representative value for metadata columns."""
+    non_null = series.dropna()
+    if len(non_null) == 0:
+        return ""
+    mode = non_null.mode(dropna=True)
+    if len(mode):
+        return str(mode.iloc[0])
+    return str(non_null.iloc[0])
+
+
+def build_feature_catalog(
+    df_morph: pd.DataFrame,
+    df_kine: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Build a catalog for real LA features with original names and units.
+    """
+    rows: List[Dict[str, str]] = []
+
+    if "parameter_name" in df_morph.columns:
+        morph_meta = (
+            df_morph.groupby("parameter_name", dropna=True)["unit"]
+            .apply(_mode_or_first_non_null)
+            .reset_index()
+        )
+        for _, row in morph_meta.iterrows():
+            param = str(row["parameter_name"])
+            rows.append({
+                "source_table": "morphology",
+                "parameter_name": param,
+                "sub_item": "",
+                "safe_name": _safe_col_name(param),
+                "unit": str(row["unit"]),
+            })
+
+    if {"parameter_name", "sub_item"}.issubset(df_kine.columns):
+        kine_meta = (
+            df_kine.groupby(["parameter_name", "sub_item"], dropna=True)["unit"]
+            .apply(_mode_or_first_non_null)
+            .reset_index()
+        )
+        for _, row in kine_meta.iterrows():
+            param = str(row["parameter_name"])
+            sub_item = str(row["sub_item"])
+            rows.append({
+                "source_table": "kinematic",
+                "parameter_name": param,
+                "sub_item": sub_item,
+                "safe_name": f"{_safe_col_name(param)}__{sub_item}",
+                "unit": str(row["unit"]),
+            })
+
+    catalog = pd.DataFrame(rows)
+    if catalog.empty:
+        return catalog
+    return catalog.sort_values(["source_table", "safe_name"]).reset_index(drop=True)
+
+
 def _resolve_path(path: str) -> str:
     """将相对路径解析为绝对路径（支持从 utils/ 子目录启动）。"""
     if os.path.isabs(path) or os.path.exists(path):
@@ -994,6 +1053,7 @@ def analyse_missingness_wide(
     df: pd.DataFrame,
     skip_cols: List[str],
     thresh_drop: float = THRESH_DROP,
+    imaging_mode: bool = True,
 ) -> pd.DataFrame:
     """
     对宽表计算每列缺失率，返回缺失率报告。
@@ -1007,18 +1067,35 @@ def analyse_missingness_wide(
         pct = n_miss / n_total if n_total else 0.0
         is_bin = _is_binary_col(df[col])
 
-        if pct >= thresh_drop:
-            decision = "DROP"
-            note = f"{pct*100:.1f}% 缺失 ≥ {thresh_drop*100:.0f}% 阈值"
-        elif pct >= THRESH_FLAG:
-            decision = "IMPUTE+FLAG"
-            note = f"{pct*100:.1f}% 缺失 → 填补 + _missing_flag"
-        elif pct > 0:
-            decision = "IMPUTE"
-            note = f"{pct*100:.1f}% 缺失 → 中位数/众数填补"
+        if imaging_mode:
+            if pct >= thresh_drop:
+                decision = "DROP"
+                note = (
+                    f"{pct*100:.1f}% 缺失 ≥ {thresh_drop*100:.0f}% 阈值，"
+                    "列剔除"
+                )
+            elif pct > 0:
+                decision = "KEEP_NA"
+                note = (
+                    f"{pct*100:.1f}% 缺失，影像参数保留 NaN，"
+                    "不做数值填补"
+                )
+            else:
+                decision = "KEEP"
+                note = "无缺失"
         else:
-            decision = "KEEP"
-            note = "无缺失"
+            if pct >= thresh_drop:
+                decision = "DROP"
+                note = f"{pct*100:.1f}% 缺失 ≥ {thresh_drop*100:.0f}% 阈值"
+            elif pct >= THRESH_FLAG:
+                decision = "IMPUTE+FLAG"
+                note = f"{pct*100:.1f}% 缺失 → 填补 + _missing_flag"
+            elif pct > 0:
+                decision = "IMPUTE"
+                note = f"{pct*100:.1f}% 缺失 → 中位数/众数填补"
+            else:
+                decision = "KEEP"
+                note = "无缺失"
 
         rows.append({
             "column":      col,
@@ -1212,6 +1289,9 @@ def process_la_params(
     df_morph, outlier_morph = apply_physio_range_check(df_morph)
     df_kine,  outlier_kine  = apply_physio_range_check(df_kine)
 
+    # 4b. 建立特征目录（基于清洗后的长表，保留原始参数名、sub_item 和单位）
+    feature_catalog = build_feature_catalog(df_morph, df_kine)
+
     # 5. 宽表 pivot
     morph_wide = pivot_morphology(df_morph)
     kine_wide  = pivot_kinematic(df_kine)
@@ -1226,9 +1306,11 @@ def process_la_params(
 
     # 6. 缺失分析
     miss_morph = analyse_missingness_wide(morph_wide, skip_cols=id_cols,
-                                          thresh_drop=thresh_drop)
+                                          thresh_drop=thresh_drop,
+                                          imaging_mode=True)
     miss_kine  = analyse_missingness_wide(kine_wide,  skip_cols=id_cols,
-                                          thresh_drop=thresh_drop)
+                                          thresh_drop=thresh_drop,
+                                          imaging_mode=True)
 
     print("\n  --- 形态表缺失率（缺失 > 0 的列）---")
     vis = miss_morph[miss_morph["pct_missing"] > 0]
@@ -1254,6 +1336,7 @@ def process_la_params(
             "review_log_kine":   pd.DataFrame(),
             "iqr_stats_morph":   pd.DataFrame(),
             "iqr_stats_kine":    pd.DataFrame(),
+            "feature_catalog":   feature_catalog,
         }
 
     # 7. 缺失值处理（影像参数不填补，仅剔除超阈值列）
@@ -1291,6 +1374,10 @@ def process_la_params(
         morph_wide, kine_wide, id_cols
     )
 
+    # 7e. 保存分析口径原始宽表（标准化前）
+    morph_wide_raw = morph_wide.copy()
+    kine_wide_raw = kine_wide.copy()
+
     # 8. 标准化
     if not no_normalise:
         morph_wide, norm_log_m = normalise_wide(morph_wide, skip_cols=id_cols)
@@ -1310,10 +1397,13 @@ def process_la_params(
 
     morph_path        = os.path.join(output_dir, "la_morphology_wide.csv")
     kine_path         = os.path.join(output_dir, "la_kinematic_wide.csv")
+    morph_raw_path    = os.path.join(output_dir, "la_morphology_wide_raw.csv")
+    kine_raw_path     = os.path.join(output_dir, "la_kinematic_wide_raw.csv")
     qc_out_path       = os.path.join(output_dir, "la_params_qc_filtered.csv")
     miss_m_path       = os.path.join(output_dir, "la_params_missingness_morph.csv")
     miss_k_path       = os.path.join(output_dir, "la_params_missingness_kine.csv")
     feat_path         = os.path.join(output_dir, "la_params_feature_decisions.csv")
+    catalog_path      = os.path.join(output_dir, "la_feature_catalog.csv")
     cross_log_path    = os.path.join(output_dir, "la_params_cross_check_log.csv")
     review_m_path     = os.path.join(output_dir, "la_params_review_log_morph.csv")
     review_k_path     = os.path.join(output_dir, "la_params_review_log_kine.csv")
@@ -1324,6 +1414,8 @@ def process_la_params(
     priority_sum_path = os.path.join(output_dir, "la_params_review_priority_summary.csv")
     priority_det_path = os.path.join(output_dir, "la_params_review_priority_detail.csv")
 
+    morph_wide_raw.to_csv(morph_raw_path, index=False)
+    kine_wide_raw.to_csv(kine_raw_path, index=False)
     morph_wide.to_csv(morph_path,  index=False)
     kine_wide.to_csv(kine_path,    index=False)
     df_qc.to_csv(qc_out_path,      index=False)
@@ -1343,6 +1435,7 @@ def process_la_params(
         miss_kine.assign(table="kinematic"),
     ], ignore_index=True)
     feat_all.to_csv(feat_path, index=False)
+    feature_catalog.to_csv(catalog_path, index=False)
 
     # IQR 图表（需要 matplotlib）
     if not no_plots:
@@ -1365,8 +1458,10 @@ def process_la_params(
         print(top10[display_cols].to_string(index=False))
 
     saved_files = [
+        morph_raw_path, kine_raw_path,
         morph_path, kine_path, qc_out_path,
         miss_m_path, miss_k_path, feat_path,
+        catalog_path,
         cross_log_path, review_m_path, review_k_path,
         iqr_m_csv_path, iqr_k_csv_path,
         priority_sum_path, priority_det_path,
@@ -1378,6 +1473,8 @@ def process_la_params(
     return {
         "morphology_wide":          morph_wide,
         "kinematic_wide":           kine_wide,
+        "morphology_wide_raw":      morph_wide_raw,
+        "kinematic_wide_raw":       kine_wide_raw,
         "qc_filtered":              df_qc,
         "missingness_morph":        miss_morph,
         "missingness_kine":         miss_kine,
@@ -1390,6 +1487,7 @@ def process_la_params(
         "iqr_stats_kine":           iqr_stats_kine,
         "review_priority_summary":  review_priority_summary,
         "review_priority_detail":   review_priority_detail,
+        "feature_catalog":          feature_catalog,
     }
 
 

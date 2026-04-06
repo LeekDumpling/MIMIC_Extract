@@ -1,11 +1,11 @@
 column,n_total,n_missing,pct_missing,dtype,is_binary,decision,note
-LAD-trans,529,111,20.98,float64,False,IMPUTE+FLAG,21.0% 缺失 → 填补 + _missing_flag
-LA_ellipticity,529,79,14.93,float64,False,IMPUTE,14.9% 缺失 → 中位数/众数填补
-LAVmin-i,529,57,10.78,float64,False,IMPUTE,10.8% 缺失 → 中位数/众数填补
-LAEF,529,46,8.7,float64,False,IMPUTE,8.7% 缺失 → 中位数/众数填补
-LAVmin,529,46,8.7,float64,False,IMPUTE,8.7% 缺失 → 中位数/众数填补
-LAVI,529,13,2.46,float64,False,IMPUTE,2.5% 缺失 → 中位数/众数填补
-TGAR,529,1,0.19,float64,False,IMPUTE,0.2% 缺失 → 中位数/众数填补
+LAD-trans,529,111,20.98,float64,False,KEEP_NA,21.0% 缺失，影像参数保留 NaN，不做数值填补
+LA_ellipticity,529,79,14.93,float64,False,KEEP_NA,14.9% 缺失，影像参数保留 NaN，不做数值填补
+LAVmin-i,529,57,10.78,float64,False,KEEP_NA,10.8% 缺失，影像参数保留 NaN，不做数值填补
+LAEF,529,46,8.7,float64,False,KEEP_NA,8.7% 缺失，影像参数保留 NaN，不做数值填补
+LAVmin,529,46,8.7,float64,False,KEEP_NA,8.7% 缺失，影像参数保留 NaN，不做数值填补
+LAVI,529,13,2.46,float64,False,KEEP_NA,2.5% 缺失，影像参数保留 NaN，不做数值填补
+TGAR,529,1,0.19,float64,False,KEEP_NA,0.2% 缺失，影像参数保留 NaN，不做数值填补
 LA_circularity,529,0,0.0,float64,False,KEEP,无缺失
 LA_eccentricity_index,529,0,0.0,float64,False,KEEP,无缺失
 LA_sphericity_index,529,0,0.0,float64,False,KEEP,无缺失
