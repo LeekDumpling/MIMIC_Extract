@@ -1,0 +1,8 @@
+{
+  "total_videos": 529,
+  "full_gt_available": 34,
+  "manual_events_available": 63,
+  "final_ok": 529,
+  "review_count": 9,
+  "output_dir": "D:\\projects\\EchoGraphs-main\\outputs\\mimic_keyframe\\fullvideo_union_finetune_20260407\\plan_e_final_parameters_all41best_current529_20260407"
+}

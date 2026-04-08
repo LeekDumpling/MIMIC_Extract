@@ -135,6 +135,7 @@ _ALPHA = 0.05
 _VIF_THRESH = 10.0
 _DPI = 300
 _MAX_HEATMAP_ANNOTATE_CELLS = 400
+_KNOWN_WINDOWS = {"hadm", "24h24h", "48h24h", "48h48h"}
 
 
 def _resolve_path(path: str) -> str:
@@ -150,6 +151,43 @@ def _infer_window_name(path: str) -> str:
     if match:
         return match.group(1)
     return os.path.splitext(basename)[0]
+
+
+def _upgrade_legacy_inputs(
+    clinical_csv: str,
+    morph_csv: str,
+    kine_csv: str,
+) -> Tuple[str, str, str]:
+    """Upgrade legacy CLI inputs to the current analysis data sources."""
+    clinical_csv = _resolve_path(clinical_csv)
+    morph_csv = _resolve_path(morph_csv)
+    kine_csv = _resolve_path(kine_csv)
+
+    window_name = _infer_window_name(clinical_csv)
+
+    if clinical_csv.endswith("_processed.csv"):
+        candidate = _resolve_path(f"csv/comorbidity/hfpef_cohort_win_{window_name}_comorbidity.csv")
+        if os.path.exists(candidate):
+            print(f"  [兼容] 检测到旧版 processed 临床输入，自动切换到：{candidate}")
+            clinical_csv = candidate
+
+    morph_dir = os.path.dirname(morph_csv)
+    morph_base = os.path.basename(morph_csv)
+    if morph_base == "la_morphology_wide.csv":
+        raw_candidate = os.path.join(morph_dir, "la_morphology_wide_raw.csv")
+        if os.path.exists(raw_candidate):
+            print(f"  [兼容] 检测到标准化形态学宽表，自动切换到原始宽表：{raw_candidate}")
+            morph_csv = raw_candidate
+
+    kine_dir = os.path.dirname(kine_csv)
+    kine_base = os.path.basename(kine_csv)
+    if kine_base == "la_kinematic_wide.csv":
+        raw_candidate = os.path.join(kine_dir, "la_kinematic_wide_raw.csv")
+        if os.path.exists(raw_candidate):
+            print(f"  [兼容] 检测到标准化运动学宽表，自动切换到原始宽表：{raw_candidate}")
+            kine_csv = raw_candidate
+
+    return clinical_csv, morph_csv, kine_csv
 
 
 def _is_binary_col(series: pd.Series) -> bool:
@@ -719,23 +757,26 @@ def run_la_analysis(
         raise RuntimeError("scipy 未安装，无法运行 A2 参数表现分析。")
     if not _STATSMODELS_AVAILABLE:
         raise RuntimeError("statsmodels 未安装，无法运行 A2 参数表现分析。")
-    if not no_plots:
-        _require_plotting(font_family)
 
-    clinical_csv = _resolve_path(clinical_csv)
-    morph_csv = _resolve_path(morph_csv)
-    kine_csv = _resolve_path(kine_csv)
+    clinical_csv, morph_csv, kine_csv = _upgrade_legacy_inputs(
+        clinical_csv,
+        morph_csv,
+        kine_csv,
+    )
     feature_catalog_csv = _resolve_path(feature_catalog_csv)
     feature_decisions_csv = _resolve_path(feature_decisions_csv)
     if qc_csv:
         qc_csv = _resolve_path(qc_csv)
+
+    window_name = window_name or _infer_window_name(clinical_csv)
     output_dir = _resolve_path(output_dir)
+    if os.path.basename(output_dir).lower() == "la_analysis":
+        output_dir = os.path.join(output_dir, window_name)
     figures_dir = os.path.join(output_dir, "figures")
     os.makedirs(output_dir, exist_ok=True)
     if not no_plots:
+        _require_plotting(font_family)
         os.makedirs(figures_dir, exist_ok=True)
-
-    window_name = window_name or _infer_window_name(clinical_csv)
     print(f"\n{'=' * 60}")
     print(f"LA 参数表现分析开始 - {window_name}")
     print(f"{'=' * 60}")
@@ -948,6 +989,12 @@ def main() -> None:
         help="窗口名称；默认从临床文件名推断",
     )
     ap.add_argument(
+        "--group_col",
+        nargs="*",
+        default=[],
+        help="兼容旧版 CLI 的遗留参数；当前 A2 分析器不再执行 group comparison，该参数会被忽略",
+    )
+    ap.add_argument(
         "--alpha",
         type=float,
         default=_ALPHA,
@@ -973,6 +1020,8 @@ def main() -> None:
 
     qc_csv = args.qc_csv.strip() if isinstance(args.qc_csv, str) else ""
     qc_csv = qc_csv if qc_csv else None
+    if args.group_col:
+        print(f"  [兼容] --group_col 已忽略：{args.group_col}")
 
     run_la_analysis(
         clinical_csv=args.clinical_csv,

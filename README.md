@@ -14,6 +14,9 @@ This workspace also includes an HFpEF survival-analysis extension with left atri
 three-window parameter-performance analysis, and LA-fused Cox modeling. The current runnable instructions are in
 `utils/README_LA_PIPELINE.md`.
 
+The current primary LA-fused model is `48h48h / any`; see `utils/README_LA_PIPELINE.md`
+for the latest status, progress summary, and validated result files.
+
 # Paper
 If you use this code in your research, please cite the following publication:
 

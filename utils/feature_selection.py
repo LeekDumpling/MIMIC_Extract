@@ -109,7 +109,9 @@ NON_FEATURE_COLS = {
 }
 
 # VIF 去除时的临床优先级（列表中靠前者优先保留）
-# 当两个特征 VIF 超阈值时，保留优先级更高（编号更小）的特征
+# 当多个特征 VIF 超阈值时，当前策略倾向于：
+#   1. 先删临床变量，尽量保留 LA 参数
+#   2. 在临床变量内部，再按下表从后往前删（越靠后越先删）
 VIF_PRIORITY = [
     # 实验室——保留肌酐，去除 BUN（重叠度高）
     "creatinine",
@@ -155,6 +157,176 @@ VIF_PRIORITY = [
     "platelet",
     "wbc",
 ]
+
+FEATURE_GROUPS = ("clinical", "morphology", "kinematic")
+
+
+def _is_la_feature(feature: str) -> bool:
+    """
+    Identify LA-derived imaging features by naming convention.
+
+    This is used only in VIF filtering to prefer keeping LA variables when
+    they are collinear with clinical covariates.
+    """
+    feature = str(feature)
+    return (
+        feature.startswith("LA_")
+        or feature.startswith("LAV")
+        or feature.startswith("LAD-")
+        or feature.startswith("MAT_")
+        or feature.startswith("TGAR")
+        or "__" in feature
+    )
+
+
+def _feature_group(feature: str) -> str:
+    """Classify a feature into clinical / morphology / kinematic."""
+    feature = str(feature)
+    if "__" in feature or feature.startswith("MAT_") or feature.startswith("TGAR"):
+        return "kinematic"
+    if feature.startswith("LA_") or feature.startswith("LAV") or feature.startswith("LAD-"):
+        return "morphology"
+    return "clinical"
+
+
+def _feature_rank_key(
+    feature: str,
+    m1_lookup: Dict[str, Dict],
+    df_cox: pd.DataFrame,
+) -> tuple:
+    """Ranking key where smaller is better for representative selection."""
+    info = m1_lookup.get(feature, {})
+    p_val = info.get("p", np.nan)
+    p_rank = float(p_val) if pd.notna(p_val) else float("inf")
+    n_obs = int(info.get("n_obs", 0) or 0)
+    missing_rate = float(df_cox[feature].isna().mean()) if feature in df_cox.columns else 1.0
+    return (p_rank, -n_obs, missing_rate, str(feature))
+
+
+def _with_feature_groups(df: pd.DataFrame, feature_col: str = "feature") -> pd.DataFrame:
+    """Attach feature_group column if feature column exists."""
+    if feature_col in df.columns and "feature_group" not in df.columns:
+        df = df.copy()
+        df["feature_group"] = df[feature_col].astype(str).map(_feature_group)
+    return df
+
+
+def _select_branch_aware_m1_candidates(
+    results_df: pd.DataFrame,
+    df_cox: pd.DataFrame,
+    p_thresholds: Dict[str, float],
+    min_candidates: Dict[str, int],
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Apply branch-aware thresholds and minimum branch quotas after M1."""
+    out = _with_feature_groups(results_df)
+    out["m1_threshold"] = out["feature_group"].map(p_thresholds).astype(float)
+    out["selected_by_branch_minimum"] = False
+    out["significant"] = (
+        out["converged"].fillna(False)
+        & out["p"].notna()
+        & (out["p"] < out["m1_threshold"])
+    )
+
+    selected = out.loc[out["significant"], "feature"].astype(str).tolist()
+    m1_lookup = out.set_index("feature").to_dict("index")
+
+    for group, min_n in min_candidates.items():
+        current = [f for f in selected if _feature_group(f) == group]
+        if len(current) >= min_n:
+            continue
+        extras_df = out[
+            (out["feature_group"] == group)
+            & out["converged"].fillna(False)
+            & (~out["feature"].isin(selected))
+        ].copy()
+        extras_df["sort_key"] = extras_df["feature"].map(
+            lambda feat: _feature_rank_key(str(feat), m1_lookup, df_cox)
+        )
+        extras_df = extras_df.sort_values("sort_key")
+        needed = max(0, min_n - len(current))
+        chosen = extras_df["feature"].astype(str).head(needed).tolist()
+        if chosen:
+            selected.extend(chosen)
+            out.loc[out["feature"].isin(chosen), "selected_by_branch_minimum"] = True
+
+    selected = list(dict.fromkeys(selected))
+    out["m1_selected"] = out["feature"].isin(selected)
+    return out, selected
+
+
+def _compress_branch_candidates(
+    df_cox: pd.DataFrame,
+    candidate_features: List[str],
+    m1_df: pd.DataFrame,
+    corr_threshold: float,
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Compress highly correlated features within morphology/kinematic branches."""
+    m1_lookup = m1_df.set_index("feature").to_dict("index") if not m1_df.empty else {}
+    log_rows: List[Dict] = []
+    retained: List[str] = []
+    cluster_id = 0
+
+    for group in FEATURE_GROUPS:
+        group_feats = [f for f in candidate_features if _feature_group(f) == group]
+        if len(group_feats) <= 1 or group == "clinical":
+            for feat in group_feats:
+                retained.append(feat)
+                log_rows.append({
+                    "iteration": 0,
+                    "feature": feat,
+                    "feature_group": group,
+                    "vif": np.nan,
+                    "action": "kept_pre_vif",
+                    "cluster_id": np.nan,
+                    "cluster_repr": feat,
+                })
+            continue
+
+        corr = df_cox[group_feats].corr(method="spearman").abs()
+        visited = set()
+
+        for feat in group_feats:
+            if feat in visited:
+                continue
+            stack = [feat]
+            component: List[str] = []
+            while stack:
+                cur = stack.pop()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                component.append(cur)
+                neighbours = corr.index[(corr.loc[cur] >= corr_threshold) & (corr.index != cur)].tolist()
+                for nb in neighbours:
+                    if nb not in visited:
+                        stack.append(nb)
+
+            component = sorted(set(component))
+            cluster_id += 1
+            if len(component) == 1:
+                rep = component[0]
+            else:
+                rep = min(component, key=lambda f: _feature_rank_key(f, m1_lookup, df_cox))
+            retained.append(rep)
+            for member in component:
+                log_rows.append({
+                    "iteration": 0,
+                    "feature": member,
+                    "feature_group": group,
+                    "vif": np.nan,
+                    "action": (
+                        f"kept_corr_cluster_repr>={corr_threshold:.2f}"
+                        if member == rep and len(component) > 1
+                        else f"removed_corr>={corr_threshold:.2f}"
+                        if member != rep
+                        else "kept_pre_vif"
+                    ),
+                    "cluster_id": cluster_id,
+                    "cluster_repr": rep,
+                })
+
+    retained = list(dict.fromkeys(retained))
+    return pd.DataFrame(log_rows), retained
 
 VIF_THRESHOLD = 10.0
 # 惩罚系数候选范围：从极小值（宽松正则化）到较大值（强正则化），确保在事件数较少时
@@ -205,7 +377,8 @@ def method1_univariate(
     """
     records = []
     for feat in feature_cols:
-        col_data = df_cox[feat]
+        sub_df = df_cox[[feat, time_col, event_col]].dropna()
+        col_data = sub_df[feat]
         # 跳过方差为零的列（常数列）
         if col_data.nunique() <= 1:
             records.append({
@@ -218,10 +391,27 @@ def method1_univariate(
                 "z": np.nan,
                 "p": np.nan,
                 "concordance": np.nan,
-                "n_obs": len(df_cox),
-                "n_events": int(df_cox[event_col].sum()),
+                "n_obs": len(sub_df),
+                "n_events": int(sub_df[event_col].sum()) if len(sub_df) else 0,
                 "converged": False,
                 "note": "constant_column",
+            })
+            continue
+        if len(sub_df) < 3:
+            records.append({
+                "feature": feat,
+                "coef": np.nan,
+                "exp_coef": np.nan,
+                "exp_coef_lower_95": np.nan,
+                "exp_coef_upper_95": np.nan,
+                "se_coef": np.nan,
+                "z": np.nan,
+                "p": np.nan,
+                "concordance": np.nan,
+                "n_obs": len(sub_df),
+                "n_events": int(sub_df[event_col].sum()) if len(sub_df) else 0,
+                "converged": False,
+                "note": "too_few_complete_cases",
             })
             continue
 
@@ -230,7 +420,7 @@ def method1_univariate(
                 warnings.filterwarnings("ignore")
                 cph = CoxPHFitter()
                 cph.fit(
-                    df_cox[[feat, time_col, event_col]],
+                    sub_df,
                     duration_col=time_col,
                     event_col=event_col,
                     show_progress=False,
@@ -258,8 +448,8 @@ def method1_univariate(
                 "exp_coef_lower_95": np.nan, "exp_coef_upper_95": np.nan,
                 "se_coef": np.nan, "z": np.nan, "p": np.nan,
                 "concordance": np.nan,
-                "n_obs": len(df_cox),
-                "n_events": int(df_cox[event_col].sum()),
+                "n_obs": len(sub_df),
+                "n_events": int(sub_df[event_col].sum()) if len(sub_df) else 0,
                 "converged": False,
                 "note": str(exc)[:120],
             }
@@ -298,6 +488,7 @@ def _compute_vif(X: pd.DataFrame) -> pd.Series:
 def method2_vif(
     df_cox: pd.DataFrame,
     candidate_features: List[str],
+    m1_df: pd.DataFrame,
     vif_threshold: float = VIF_THRESHOLD,
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
@@ -312,7 +503,7 @@ def method2_vif(
     if len(candidate_features) < 2:
         log_rows = [{"iteration": 0, "feature": f, "vif": np.nan, "action": "kept_single"}
                     for f in candidate_features]
-        return pd.DataFrame(log_rows), list(candidate_features)
+        return _with_feature_groups(pd.DataFrame(log_rows)), list(candidate_features)
 
     remaining = list(candidate_features)
     log_rows = []
@@ -346,21 +537,34 @@ def method2_vif(
         if np.isnan(max_vif) or max_vif <= vif_threshold:
             break  # 所有特征 VIF 均达标
 
-        # 找出 VIF 最高的特征；如果超阈值有多个，按优先级决定删除哪个
+        # 找出需要删除的特征；如果超阈值有多个，按优先级决定删除哪个。
+        # 规则：优先删除临床变量，尽量保留 LA 参数进入后续 LASSO。
         over_threshold = vif_series[vif_series > vif_threshold].index.tolist()
-        # 按 VIF_PRIORITY 降序查找"优先级最低"（靠后）的特征去删
-        def _priority(f: str) -> int:
-            try:
-                return VIF_PRIORITY.index(f)
-            except ValueError:
-                return len(VIF_PRIORITY)  # 不在优先级列表中：中等优先级
 
-        # 在超阈值集合中删除优先级最低（index 最大）的
-        to_remove = max(over_threshold, key=lambda f: _priority(f))
+        m1_lookup = m1_df.set_index("feature").to_dict("index") if not m1_df.empty else {}
+
+        def _delete_priority(f: str) -> tuple:
+            group = _feature_group(f)
+            group_rank = {
+                "clinical": 2,
+                "morphology": 1,
+                "kinematic": 0,
+            }[group]
+            info = m1_lookup.get(f, {})
+            p_val = info.get("p", np.nan)
+            p_rank = float(p_val) if pd.notna(p_val) else float("inf")
+            missing_rate = float(df_cox[f].isna().mean()) if f in df_cox.columns else 1.0
+            return (group_rank, p_rank, missing_rate, str(f))
+
+        # 在超阈值集合中删除优先级最低者：
+        # clinical 先删，morphology 次后删，kinematic 最后删；
+        # 同组内删单变量 p 更差 / 缺失率更高 / 名字更靠后者。
+        to_remove = max(over_threshold, key=lambda f: _delete_priority(f))
         remaining.remove(to_remove)
         log_rows.append({
             "iteration": iteration,
             "feature": to_remove,
+            "feature_group": _feature_group(to_remove),
             "vif": round(float(vif_series[to_remove]), 4),
             "action": f"removed_vif>{vif_threshold:.0f}",
         })
@@ -374,6 +578,7 @@ def method2_vif(
             # 最后一轮 computed 且仍在 remaining 中
             pass
     final_log = pd.DataFrame(log_rows)
+    final_log = _with_feature_groups(final_log)
     final_log["retained"] = final_log["feature"].isin(remaining)
     return final_log, remaining
 
@@ -528,6 +733,117 @@ def method3_lasso(
     return cv_df, coef_df, final_features
 
 
+def _augment_with_kinematic(
+    df_cox: pd.DataFrame,
+    base_features: List[str],
+    kinematic_candidates: List[str],
+    m1_df: pd.DataFrame,
+    event_col: str,
+    time_col: str,
+    topk: int,
+    p_threshold: float,
+) -> Tuple[pd.DataFrame, List[str], bool, Optional[str]]:
+    """
+    Soft-preserve one kinematic feature after LASSO if none survived.
+    """
+    if not kinematic_candidates:
+        return pd.DataFrame(), list(base_features), False, None
+
+    m1_lookup = m1_df.set_index("feature").to_dict("index") if not m1_df.empty else {}
+    ranked = sorted(
+        [f for f in kinematic_candidates if f not in base_features],
+        key=lambda f: _feature_rank_key(f, m1_lookup, df_cox),
+    )[:topk]
+    if not ranked:
+        return pd.DataFrame(), list(base_features), False, None
+
+    best_row = None
+    best_feature = None
+    rows = []
+
+    for candidate in ranked:
+        features = list(dict.fromkeys(base_features + [candidate]))
+        cols = features + [time_col, event_col]
+        df_model = df_cox[cols].dropna()
+        if len(df_model) < 3 or int(df_model[event_col].sum()) < MIN_EVENTS:
+            rows.append({
+                "feature": candidate,
+                "coef": np.nan,
+                "p": np.nan,
+                "penalizer": np.nan,
+                "nonzero": False,
+                "fallback": False,
+                "augmented": True,
+                "selected_via": "kinematic_augmentation",
+                "note": "too_few_complete_cases",
+            })
+            continue
+
+        fitted = None
+        used_pen = 0.0
+        for pen in (0.0, 0.05):
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore")
+                    cph = CoxPHFitter(penalizer=pen)
+                    cph.fit(
+                        df_model,
+                        duration_col=time_col,
+                        event_col=event_col,
+                        show_progress=False,
+                    )
+                fitted = cph
+                used_pen = pen
+                break
+            except Exception:
+                continue
+
+        if fitted is None or candidate not in fitted.summary.index:
+            rows.append({
+                "feature": candidate,
+                "coef": np.nan,
+                "p": np.nan,
+                "penalizer": np.nan,
+                "nonzero": False,
+                "fallback": False,
+                "augmented": True,
+                "selected_via": "kinematic_augmentation",
+                "note": "fit_failed",
+            })
+            continue
+
+        p_val = float(fitted.summary.loc[candidate, "p"])
+        coef = float(fitted.summary.loc[candidate, "coef"])
+        row = {
+            "feature": candidate,
+            "coef": coef,
+            "p": p_val,
+            "penalizer": used_pen,
+            "nonzero": abs(coef) > 1e-4,
+            "fallback": used_pen > 0,
+            "augmented": True,
+            "selected_via": "kinematic_augmentation",
+            "note": "",
+        }
+        rows.append(row)
+
+        if p_val < p_threshold:
+            if best_row is None or (p_val, -len(df_model), candidate) < (
+                float(best_row["p"]),
+                -int(best_row.get("n_obs", 0)),
+                str(best_row["feature"]),
+            ):
+                row["n_obs"] = len(df_model)
+                best_row = row
+                best_feature = candidate
+
+    if best_feature is not None and best_row is not None:
+        final_features = list(dict.fromkeys(base_features + [best_feature]))
+        return pd.DataFrame(rows), final_features, True, best_feature
+
+    return pd.DataFrame(rows), list(base_features), False, None
+
+
 # ---------------------------------------------------------------------------
 # 汇总辅助
 # ---------------------------------------------------------------------------
@@ -538,6 +854,7 @@ def _build_final_table(
     m2_retained: List[str],
     m3_coef_df: pd.DataFrame,
     m3_final: List[str],
+    selected_via: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
     """将三步筛选结果合并为单张汇总表。"""
     rows = []
@@ -546,18 +863,20 @@ def _build_final_table(
         m3_coef_df.set_index("feature")["coef"].to_dict()
         if "feature" in m3_coef_df.columns else {}
     )
+    selected_via = selected_via or {}
 
     for feat in all_features:
         m1_info = m1_dict.get(feat, {})
         row = {
             "feature": feat,
+            "feature_group": _feature_group(feat),
             # 方法 1
             "m1_coef":    m1_info.get("coef", np.nan),
             "m1_hr":      m1_info.get("exp_coef", np.nan),
             "m1_hr_lo95": m1_info.get("exp_coef_lower_95", np.nan),
             "m1_hr_hi95": m1_info.get("exp_coef_upper_95", np.nan),
             "m1_p":       m1_info.get("p", np.nan),
-            "m1_pass":    bool(m1_info.get("significant", False)),
+            "m1_pass":    bool(m1_info.get("m1_selected", False)),
             # 方法 2
             "m2_pass":    feat in m2_retained,
             # 方法 3
@@ -565,6 +884,7 @@ def _build_final_table(
             "m3_pass":    feat in m3_final,
             # 最终：通过方法 3 LASSO 非零
             "final_selected": feat in m3_final,
+            "selected_via": selected_via.get(feat, "lasso" if feat in m3_final else ""),
         }
         rows.append(row)
 
@@ -582,6 +902,13 @@ def process_window_endpoint(
     window: str,
     endpoint: str,
     output_dir: str,
+    m1_p_thresholds: Dict[str, float],
+    min_branch_candidates: Dict[str, int],
+    branch_corr_threshold: float,
+    kinematic_augment_topk: int,
+    kinematic_augment_p: float,
+    vif_threshold: float,
+    cv_folds: int,
     dry_run: bool = False,
 ) -> Dict:
     """
@@ -617,25 +944,86 @@ def process_window_endpoint(
     ]
 
     # ---- 方法 1 ----
-    print(f"  [{label}] 方法 1：{len(feature_cols)} 个特征单变量筛选 (p<{UNIVARIATE_P_THRESHOLD})")
-    m1_df, m1_candidates = method1_univariate(df_cox, feature_cols, event_col, time_col)
-    print(f"  [{label}] 方法 1 通过：{len(m1_candidates)} 个特征")
+    print(
+        f"  [{label}] 方法 1：{len(feature_cols)} 个特征单变量筛选 "
+        f"(clinical<{m1_p_thresholds['clinical']}, "
+        f"morphology<{m1_p_thresholds['morphology']}, "
+        f"kinematic<{m1_p_thresholds['kinematic']})"
+    )
+    m1_raw_df, _ = method1_univariate(df_cox, feature_cols, event_col, time_col)
+    m1_df, m1_candidates = _select_branch_aware_m1_candidates(
+        m1_raw_df,
+        df_cox,
+        p_thresholds=m1_p_thresholds,
+        min_candidates=min_branch_candidates,
+    )
+    print(
+        f"  [{label}] 方法 1 通过：{len(m1_candidates)} 个特征 "
+        f"(kinematic={sum(_feature_group(f) == 'kinematic' for f in m1_candidates)})"
+    )
+
+    # ---- M1 -> M2 分支内高相关压缩 ----
+    corr_log, branch_reduced = _compress_branch_candidates(
+        df_cox,
+        m1_candidates,
+        m1_df,
+        corr_threshold=branch_corr_threshold,
+    )
+    print(
+        f"  [{label}] 分支内压缩后：{len(branch_reduced)} 个特征 "
+        f"(kinematic={sum(_feature_group(f) == 'kinematic' for f in branch_reduced)})"
+    )
 
     # ---- 方法 2 ----
-    print(f"  [{label}] 方法 2：VIF 共线性过滤 (阈值={VIF_THRESHOLD})")
-    m2_log, m2_retained = method2_vif(df_cox, m1_candidates)
-    print(f"  [{label}] 方法 2 通过：{len(m2_retained)} 个特征")
+    print(f"  [{label}] 方法 2：VIF 共线性过滤 (阈值={vif_threshold})")
+    m2_vif_log, m2_retained = method2_vif(df_cox, branch_reduced, m1_df, vif_threshold=vif_threshold)
+    m2_log = pd.concat([corr_log, m2_vif_log], ignore_index=True, sort=False)
+    print(
+        f"  [{label}] 方法 2 通过：{len(m2_retained)} 个特征 "
+        f"(kinematic={sum(_feature_group(f) == 'kinematic' for f in m2_retained)})"
+    )
 
     # ---- 方法 3 ----
-    print(f"  [{label}] 方法 3：LASSO Cox CV ({CV_FOLDS} 折, {len(LASSO_PENALIZERS)} 个 penalizer)")
-    m3_cv, m3_coef, m3_final = method3_lasso(df_cox, m2_retained, event_col, time_col)
+    print(f"  [{label}] 方法 3：LASSO Cox CV ({cv_folds} 折, {len(LASSO_PENALIZERS)} 个 penalizer)")
+    m3_cv, m3_coef, m3_final = method3_lasso(df_cox, m2_retained, event_col, time_col, cv_folds=cv_folds)
     m3_fallback = bool(m3_coef["fallback"].any()) if not m3_coef.empty and "fallback" in m3_coef.columns else False
     if m3_fallback:
         print(f"  [{label}] 方法 3 回退：CV最优penalizer全归零，已切换至最小有效penalizer")
-    print(f"  [{label}] 方法 3 最终特征：{len(m3_final)} 个 → {m3_final}")
+    kinematic_augmented = False
+    kinematic_augmented_feature = None
+    selected_via = {feat: "lasso" for feat in m3_final}
+    if not any(_feature_group(feat) == "kinematic" for feat in m3_final):
+        kine_candidates = [feat for feat in m2_retained if _feature_group(feat) == "kinematic"]
+        aug_df, augmented_final, kinematic_augmented, kinematic_augmented_feature = _augment_with_kinematic(
+            df_cox=df_cox,
+            base_features=m3_final,
+            kinematic_candidates=kine_candidates,
+            m1_df=m1_df,
+            event_col=event_col,
+            time_col=time_col,
+            topk=kinematic_augment_topk,
+            p_threshold=kinematic_augment_p,
+        )
+        if not aug_df.empty:
+            m3_coef = pd.concat([m3_coef, aug_df], ignore_index=True, sort=False)
+        if kinematic_augmented and kinematic_augmented_feature:
+            m3_final = augmented_final
+            selected_via[kinematic_augmented_feature] = "kinematic_augmentation"
+            print(f"  [{label}] 软保留运动学特征：{kinematic_augmented_feature}")
+    print(
+        f"  [{label}] 方法 3 最终特征：{len(m3_final)} 个 "
+        f"(kinematic={sum(_feature_group(f) == 'kinematic' for f in m3_final)}) → {m3_final}"
+    )
 
     # ---- 汇总表 ----
-    final_tbl = _build_final_table(feature_cols, m1_df, m2_retained, m3_coef, m3_final)
+    final_tbl = _build_final_table(
+        feature_cols,
+        m1_df,
+        m2_retained,
+        m3_coef,
+        m3_final,
+        selected_via=selected_via,
+    )
 
     # ---- 写出报告 ----
     if not dry_run:
@@ -644,13 +1032,16 @@ def process_window_endpoint(
 
         m1_df.to_csv(
             os.path.join(win_dir, f"method1_univariate_{endpoint}.csv"), index=False)
-        m1_cand = m1_df[m1_df["significant"] & m1_df["converged"]].copy()
+        m1_cand = m1_df[m1_df["m1_selected"]].copy()
         m1_cand.to_csv(
             os.path.join(win_dir, f"method1_candidates_{endpoint}.csv"), index=False)
 
         m2_log.to_csv(
             os.path.join(win_dir, f"method2_vif_{endpoint}.csv"), index=False)
-        pd.DataFrame({"feature": m2_retained}).to_csv(
+        pd.DataFrame({
+            "feature": m2_retained,
+            "feature_group": [_feature_group(feat) for feat in m2_retained],
+        }).to_csv(
             os.path.join(win_dir, f"method2_candidates_{endpoint}.csv"), index=False)
 
         if not m3_cv.empty:
@@ -676,6 +1067,11 @@ def process_window_endpoint(
         "m1_candidates": len(m1_candidates),
         "m2_candidates": len(m2_retained),
         "m3_final": len(m3_final),
+        "m1_kinematic": sum(_feature_group(f) == "kinematic" for f in m1_candidates),
+        "m2_kinematic": sum(_feature_group(f) == "kinematic" for f in m2_retained),
+        "m3_kinematic": sum(_feature_group(f) == "kinematic" for f in m3_final),
+        "kinematic_augmented": kinematic_augmented,
+        "kinematic_augmented_feature": kinematic_augmented_feature,
         "m3_fallback": m3_fallback,
         "m3_zero_reason": (
             "lasso_shrinkage" if len(m3_final) == 0 and len(m2_retained) > 0 else
@@ -706,8 +1102,24 @@ def main() -> None:
                     help="仅处理指定终点（默认：全部）")
     ap.add_argument("--window", default=None,
                     help="仅处理指定时间窗关键词（如 hadm、48h24h）")
-    ap.add_argument("--p_threshold", type=float, default=UNIVARIATE_P_THRESHOLD,
-                    help=f"方法 1 单变量 Cox 筛选 p 值阈值（默认：{UNIVARIATE_P_THRESHOLD}）")
+    ap.add_argument("--p_threshold", type=float, default=None,
+                    help="兼容旧版的统一 M1 p 值阈值；若提供，则同时覆盖 clinical / morphology / kinematic")
+    ap.add_argument("--m1_p_clinical", type=float, default=0.10,
+                    help="clinical 分支单变量 Cox 阈值（默认：0.10）")
+    ap.add_argument("--m1_p_morphology", type=float, default=0.10,
+                    help="morphology 分支单变量 Cox 阈值（默认：0.10）")
+    ap.add_argument("--m1_p_kinematic", type=float, default=0.20,
+                    help="kinematic 分支单变量 Cox 阈值（默认：0.20）")
+    ap.add_argument("--min_morph_candidates", type=int, default=2,
+                    help="morphology 分支的 M1 最低保留数（默认：2）")
+    ap.add_argument("--min_kine_candidates", type=int, default=3,
+                    help="kinematic 分支的 M1 最低保留数（默认：3）")
+    ap.add_argument("--branch_corr_threshold", type=float, default=0.95,
+                    help="分支内高相关压缩阈值 |r|（默认：0.95）")
+    ap.add_argument("--kinematic_augment_topk", type=int, default=2,
+                    help="LASSO 后运动学软保留候选数（默认：2）")
+    ap.add_argument("--kinematic_augment_p", type=float, default=0.10,
+                    help="运动学软保留联合 Cox 的 p 值阈值（默认：0.10）")
     ap.add_argument("--vif_threshold", type=float, default=VIF_THRESHOLD,
                     help=f"方法 2 VIF 阈值（默认：{VIF_THRESHOLD}）")
     ap.add_argument("--cv_folds", type=int, default=CV_FOLDS,
@@ -733,6 +1145,20 @@ def main() -> None:
         return
 
     endpoints = [args.endpoint] if args.endpoint else list(ENDPOINTS.keys())
+    if args.p_threshold is not None:
+        args.m1_p_clinical = args.p_threshold
+        args.m1_p_morphology = args.p_threshold
+        args.m1_p_kinematic = args.p_threshold
+
+    m1_p_thresholds = {
+        "clinical": float(args.m1_p_clinical),
+        "morphology": float(args.m1_p_morphology),
+        "kinematic": float(args.m1_p_kinematic),
+    }
+    min_branch_candidates = {
+        "morphology": int(args.min_morph_candidates),
+        "kinematic": int(args.min_kine_candidates),
+    }
 
     print(f"找到 {len(input_files)} 个文件，处理终点：{endpoints}")
 
@@ -752,6 +1178,13 @@ def main() -> None:
         for ep in endpoints:
             summary = process_window_endpoint(
                 df, window, ep, args.output_dir,
+                m1_p_thresholds=m1_p_thresholds,
+                min_branch_candidates=min_branch_candidates,
+                branch_corr_threshold=float(args.branch_corr_threshold),
+                kinematic_augment_topk=int(args.kinematic_augment_topk),
+                kinematic_augment_p=float(args.kinematic_augment_p),
+                vif_threshold=float(args.vif_threshold),
+                cv_folds=int(args.cv_folds),
                 dry_run=args.dry_run,
             )
             all_summaries.append(summary)

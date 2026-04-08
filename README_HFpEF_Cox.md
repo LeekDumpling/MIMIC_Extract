@@ -19,8 +19,126 @@
 | `event_90d` / `time_90d` | 出院后 90 天内死亡（衍生） | 从 `os_event` + `os_days` 截断衍生 |
 | `event_1yr` / `time_1yr` | 出院后 1 年内死亡（衍生） | 从 `os_event` + `os_days` 截断衍生 |
 
-三个特征时间窗（`win_hadm`、`win_48h24h`、`win_48h48h`）将与**主要终点及三种时间截止点**逐一组合，
+当前活动的三个特征时间窗（`win_hadm`、`win_24h24h`、`win_48h48h`）将与**主要终点及三种时间截止点**逐一组合，
 共产生多个 Cox 模型，比较不同特征窗口与时间截止点的预测效果。
+
+## 当前状态更新（2026-04-07）
+
+> 本节用于覆盖下文中较早批次结果的历史性描述。若与后文旧结论不一致，以本节为准。
+
+### 当前主模型
+
+- 当前主模型固定为 `48h48h / any`
+- 当前主模型来源于 LA 融合后的重比较主线：`csv/la_fusion_rewindow/`
+- 当前主模型的内部验证结果：
+  - apparent C-index：`0.6454`
+  - optimism-corrected C-index：`0.6263`
+  - 内部验证样本量：`450`
+  - 事件数：`233`
+- 当前主模型被选为正文主模型的原因：
+  - PH 检验通过，无需分层校正
+  - calibration 分组风险随预测风险单调上升，形态明显优于 `24h24h / any`
+  - 同时保留了 LA 形态学和运动学信息，便于结果解释
+
+### 当前进度
+
+- `A1` LA 参数清洗：已完成双口径输出
+  - 原始分析表
+  - 标准化建模表
+- `A2` LA 参数表现分析：已完成
+  - `hadm`
+  - `24h24h`
+  - `48h48h`
+- `A3` LA 融合 Cox 主线：已完成
+  - feature selection
+  - Cox fitting
+  - PH testing
+  - model evaluation
+
+### 最新 LA 结果目录
+
+- 最新验证使用的 LA 清洗结果目录：
+  - `csv/la_params/processed_20260407_0732_rerun/`
+- 最新 A2 输出目录：
+  - `csv/la_analysis_rewindow/`
+- 最新 LA 融合建模输出目录：
+  - `csv/la_fusion_rewindow/`
+
+### 当前已完成评估的模型
+
+| 模型 | corrected C-index | 备注 |
+|------|-------------------|------|
+| `24h24h/any` | `0.6614` | 判别力最高，但校准欠稳，且分层校正后仍存在残余 PH 问题 |
+| `48h48h/1yr` | `0.6054` | 分层校正后评估 |
+| `48h48h/any` | `0.6263` | 当前主模型；PH 通过；校准更稳定 |
+| `hadm/any` | `0.6130` | 分层校正后评估 |
+
+### 当前主模型变量（`48h48h / any`）
+
+- 临床变量：
+  - `hemoglobin`
+  - `peripheral_vascular_disease`
+  - `bun`
+  - `hf_cardiorenal`
+  - `hf_competing_risk`
+  - `myocardial_infarct`
+  - `chronic_pulmonary_disease`
+- 形态学变量：
+  - `LAVmin-i`
+  - `LA_eccentricity_index`
+- 运动学变量：
+  - `Time_to_peak_LASrR__from_LAVmin`
+
+### 左心房参数在当前主模型中的贡献
+
+- `LAVmin-i`
+  - HR：`1.2330`
+  - 95% CI：`1.0498–1.4482`
+  - p：`0.0107`
+- `LA_eccentricity_index`
+  - HR：`1.2447`
+  - 95% CI：`1.0746–1.4417`
+  - p：`0.0035`
+- `Time_to_peak_LASrR__from_LAVmin`
+  - HR：`0.8721`
+  - 95% CI：`0.7639–0.9956`
+  - p：`0.0429`
+
+可用于论文正文的解释口径：
+
+- 当前主模型中的 LA 贡献同时来自结构和功能两部分
+- 结构方面由 `LAVmin-i` 和 `LA_eccentricity_index` 提供独立风险信息
+- 功能方面由 `Time_to_peak_LASrR__from_LAVmin` 提供应变时序信息
+- 因此，`48h48h / any` 并非仅由临床变量驱动，而是保留了可解释的左房增量信息
+
+### 论文写作建议
+
+- 正文主模型：`48h48h / any`
+- 判别力最高但不作为正文主模型的对照模型：`24h24h / any`
+- 住院全程宽窗口对照模型：`hadm / any`
+- 结果部分建议突出：
+  - `48h48h / any` 在判别、校准和 PH 稳定性之间取得更均衡的表现
+  - `24h24h / any` 可作为敏感性分析或补充比较模型
+
+### 关键结果文件
+
+- 主模型 Cox 结果：
+  - `csv/la_fusion_rewindow/cox_models/48h48h/cox_results_any.csv`
+- 主模型 PH 检验：
+  - `csv/la_fusion_rewindow/cox_models/ph_test/ph_test_48h48h_any.csv`
+- 主模型 bootstrap C-index：
+  - `csv/la_fusion_rewindow/model_eval/48h48h_any/bootstrap_cindex.json`
+- 主模型 calibration：
+  - `csv/la_fusion_rewindow/model_eval/48h48h_any/calibration.csv`
+- 主模型 DCA：
+  - `csv/la_fusion_rewindow/model_eval/48h48h_any/dca.csv`
+
+### LA 专用运行说明
+
+- LA 分支的最新运行说明、主模型状态和结果路径汇总见：
+  - `utils/README_LA_PIPELINE.md`
+- 历史窗口 `48h24h` 已弃用；其定义对应“超声检查前48小时至后24小时”，
+  当前正式比较窗口为 `hadm`、`24h24h`、`48h48h`
 
 ---
 
@@ -142,7 +260,8 @@ README_HFpEF_Cox.md           # ← 本文件
 | 窗口 | 描述 |
 |------|------|
 | `win_hadm` | 整个指数住院期间（入院 → 出院） |
-| `win_48h24h` | 超声检查前 48 小时至前 24 小时 |
+| `win_48h24h` | 历史窗口，已弃用：超声检查前 48 小时至后 24 小时 |
+| `win_24h24h` | 当前活动窗口：超声检查前 24 小时至后 24 小时 |
 | `win_48h48h` | 超声检查前 48 小时至后 48 小时 |
 
 **各窗口提取的特征**：
@@ -1165,13 +1284,7 @@ python utils/model_evaluation.py
 python utils/clean_la_params.py --morphology csv/la_params/final_morphology_results.csv --kinematic csv/la_params/final_kinematic_stats.csv --qc csv/la_params/final_qc.csv --output_dir csv/la_params/processed
 
 :: A2 — LA × MIMIC 临床参数联合分析（以 hadm 时间窗为例）
-python utils/la_analysis.py ^
-  --clinical_csv csv/processed/hfpef_cohort_win_hadm_processed.csv ^
-  --morph_csv    csv/la_params/processed/la_morphology_wide.csv ^
-  --kine_csv     csv/la_params/processed/la_kinematic_wide.csv ^
-  --qc_csv       csv/la_params/processed/la_params_qc_filtered.csv ^
-  --output_dir   csv/la_analysis ^
-  --group_col    died_inhosp os_event
+python utils/la_analysis.py --clinical_csv csv/processed/hfpef_cohort_win_hadm_processed.csv --morph_csv csv/la_params/processed/la_morphology_wide.csv --kine_csv csv/la_params/processed/la_kinematic_wide.csv --qc_csv csv/la_params/processed/la_params_qc_filtered.csv --output_dir csv/la_analysis --group_col died_inhosp os_event
 ```
 
 **各步骤说明**：

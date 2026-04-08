@@ -26,7 +26,7 @@ except ImportError:
     raise ImportError("无法导入 la_analysis.py，请确认 utils 目录完整。") from None
 
 
-WINDOWS: List[str] = ["hadm", "48h24h", "48h48h"]
+WINDOWS: List[str] = ["hadm", "24h24h", "48h48h"]
 
 
 def _resolve_path(path: str) -> str:
@@ -38,6 +38,20 @@ def _resolve_path(path: str) -> str:
 
 def _repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _normalise_windows(windows: Optional[Sequence[str]]) -> List[str]:
+    """Return a validated window list preserving input order."""
+    if not windows:
+        return list(WINDOWS)
+    seen = []
+    for window in windows:
+        w = str(window).strip()
+        if not w:
+            continue
+        if w not in seen:
+            seen.append(w)
+    return seen
 
 
 def _prepare_join_columns(df: pd.DataFrame, study_col: str) -> pd.DataFrame:
@@ -205,11 +219,12 @@ def run_fusion_stage(
 
 def run_full_stage(
     la_processed_dir: str,
+    windows: Sequence[str],
+    analysis_root: str,
+    fusion_root: str,
     font_family: Optional[str],
     no_plots: bool,
 ) -> None:
-    analysis_root = _resolve_path("csv/la_analysis")
-    fusion_root = _resolve_path("csv/la_fusion")
     fusion_processed_dir = os.path.join(fusion_root, "processed")
     fusion_survival_dir = os.path.join(fusion_root, "survival")
     fusion_feature_dir = os.path.join(fusion_root, "feature_selection")
@@ -218,14 +233,14 @@ def run_full_stage(
     fusion_eval_dir = os.path.join(fusion_root, "model_eval")
 
     run_analysis_stage(
-        WINDOWS,
+        windows,
         analysis_root=analysis_root,
         la_processed_dir=la_processed_dir,
         font_family=font_family,
         no_plots=no_plots,
     )
     run_fusion_stage(
-        WINDOWS,
+        windows,
         analysis_root=analysis_root,
         la_processed_dir=la_processed_dir,
         fusion_processed_dir=fusion_processed_dir,
@@ -280,6 +295,7 @@ def main() -> None:
     ap_analysis = sub.add_parser("analysis", help="运行三窗口 A2 参数表现分析")
     ap_analysis.add_argument("--analysis_root", default="csv/la_analysis", help="A2 输出根目录")
     ap_analysis.add_argument("--la_processed_dir", default="csv/la_params/processed", help="LA 清洗输出目录")
+    ap_analysis.add_argument("--windows", nargs="+", default=None, help="要运行的窗口列表（默认：hadm 24h24h 48h48h）")
     ap_analysis.add_argument("--font_family", default=None, help="显式指定中文字体")
     ap_analysis.add_argument("--no_plots", action="store_true", help="跳过 A2 图表输出")
 
@@ -287,17 +303,22 @@ def main() -> None:
     ap_fusion.add_argument("--analysis_root", default="csv/la_analysis", help="A2 输出根目录")
     ap_fusion.add_argument("--la_processed_dir", default="csv/la_params/processed", help="LA 清洗输出目录")
     ap_fusion.add_argument("--fusion_processed_dir", default="csv/la_fusion/processed", help="融合后的 processed 目录")
+    ap_fusion.add_argument("--windows", nargs="+", default=None, help="要融合的窗口列表（默认：hadm 24h24h 48h48h）")
 
     ap_full = sub.add_parser("full", help="串行执行 analysis -> fusion -> survival -> feature_selection -> Cox -> PH -> evaluation")
     ap_full.add_argument("--la_processed_dir", default="csv/la_params/processed", help="LA 清洗输出目录")
+    ap_full.add_argument("--windows", nargs="+", default=None, help="要运行的窗口列表（默认：hadm 24h24h 48h48h）")
+    ap_full.add_argument("--analysis_root", default="csv/la_analysis", help="A2 输出根目录")
+    ap_full.add_argument("--fusion_root", default="csv/la_fusion", help="LA 融合输出根目录")
     ap_full.add_argument("--font_family", default=None, help="显式指定中文字体")
     ap_full.add_argument("--no_plots", action="store_true", help="跳过所有可视化输出")
 
     args = ap.parse_args()
+    windows = _normalise_windows(getattr(args, "windows", None))
 
     if args.command == "analysis":
         run_analysis_stage(
-            WINDOWS,
+            windows,
             analysis_root=_resolve_path(args.analysis_root),
             la_processed_dir=_resolve_path(args.la_processed_dir),
             font_family=args.font_family,
@@ -305,7 +326,7 @@ def main() -> None:
         )
     elif args.command == "fusion":
         run_fusion_stage(
-            WINDOWS,
+            windows,
             analysis_root=_resolve_path(args.analysis_root),
             la_processed_dir=_resolve_path(args.la_processed_dir),
             fusion_processed_dir=_resolve_path(args.fusion_processed_dir),
@@ -313,6 +334,9 @@ def main() -> None:
     elif args.command == "full":
         run_full_stage(
             la_processed_dir=_resolve_path(args.la_processed_dir),
+            windows=windows,
+            analysis_root=_resolve_path(args.analysis_root),
+            fusion_root=_resolve_path(args.fusion_root),
             font_family=args.font_family,
             no_plots=args.no_plots,
         )
